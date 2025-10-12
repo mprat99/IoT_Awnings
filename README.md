@@ -68,7 +68,7 @@ Below are examples of the embedded web portal used to control and configure the 
 3. Within 20 seconds of powering on the ESP32, connect to the Wi-Fi access point it creates.  
    - SSID: `Kitchen Awnings`  
    - Password: `Croquets`  
-   - If not connected within 20 seconds, the access point will deactivate and you'll need to reboot the ESP-32.  
+   - If not connected within 20 seconds, the access point will deactivate and you'll need to reboot the ESP32.  
    - Once connected, navigate to [192.168.4.1](http://192.168.4.1), scroll down, and enter your Wi-Fi SSID and password to complete setup.  
 4. After configuration, access the web interface via the device’s IP address on your local network, by default fixed at 192.168.1.155, you can change it on the code.
 
