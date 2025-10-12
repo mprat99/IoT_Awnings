@@ -1,6 +1,6 @@
-# 🏡 Kitchen Awnings Project
+# 🏡 IoT Awnings Project
 
-Welcome to the Kitchen Awnings repository — a multidisciplinary IoT project that blends mechanics, electronics, 3D printing, battery management, and embedded systems to create a smart, solar-powered awning control system.
+Welcome to the IoT Awnings repository — a multidisciplinary IoT project that blends mechanics, electronics, 3D printing, battery management, and embedded systems to create a smart, solar-powered awning control system.
 
 ## 🚀 Overview
 
