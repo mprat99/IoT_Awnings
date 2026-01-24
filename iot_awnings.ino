@@ -892,18 +892,18 @@ void inaSetup() {
   if (!inaBat.init()) {
     DEBUG_PRINTLN("INA226 battery init failed!");
   }
-  inaBat.setAverage(AVERAGE_4);
-  inaBat.setConversionTime(CONV_TIME_1100);  // ~8.2ms
-  inaBat.setMeasureMode(TRIGGERED);
+  inaBat.setAverage(INA226_AVERAGE_4);
+  inaBat.setConversionTime(INA226_CONV_TIME_1100);  // ~8.2ms
+  inaBat.setMeasureMode(INA226_TRIGGERED);
   inaBat.setResistorRange(R_SHUNT_BAT, 4.0f);
 
   // PV INA
   if (!inaPV.init()) {
     DEBUG_PRINTLN("INA226 PV init failed!");
   }
-  inaPV.setAverage(AVERAGE_4);
-  inaPV.setConversionTime(CONV_TIME_1100);
-  inaPV.setMeasureMode(TRIGGERED);
+  inaPV.setAverage(INA226_AVERAGE_4);
+  inaPV.setConversionTime(INA226_CONV_TIME_1100);
+  inaPV.setMeasureMode(INA226_TRIGGERED);
   inaPV.setResistorRange(R_SHUNT_PV, 4.0f);
 }
 
