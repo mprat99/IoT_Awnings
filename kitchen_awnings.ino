@@ -188,6 +188,7 @@ bool solarChargerEnabled = true;
 bool output12VEnabled = true;
 bool bootUpSunCheck = false;
 // bool highCPU          = false;
+bool preemptiveFoldTriggered = false;
 
 
 int rainState = 0;
@@ -213,11 +214,12 @@ unsigned long inaTriggerMillis = 0;
 unsigned long inaReadMillis = 0;
 bool inaMeasuring = false;
 unsigned long inaPeriod = 10000;
+unsigned long previousInaPeriod = 10000;
 
 float batteryVoltage = 0.0f;
 float batteryCurrent = 0.0f;
 float pvCurrent = 0.0f;
-float lowVoltageValue = 9.0f;
+float lowVoltageValue = 9.5f;
 bool lowVoltage = false;  // Battery under 9V
 bool chargerInitialized = false;
 bool socInitialized = false;
@@ -268,6 +270,12 @@ float pvToday = 0.0f;
 
 bool serialDebug = false;
 
+const float PREEMPTIVE_SOC = 25.0f;
+const float PREEMPTIVE_SOC_CLEAR = 30.0f;
+const float PREEMPTIVE_VOLT = 11.3f;
+const float PREEMPTIVE_VOLT_CLEAR = 11.6f;
+const float PV_CHARGING_MIN_MA = 20.0f;
+
 #define DEBUG_PRINT(x) \
   do { \
     if (serialDebug) Serial.print(x); \
@@ -305,7 +313,8 @@ void moveDown(uint8_t i);
 void stop(uint8_t i);
 
 void enableOutput12V();
-void disableOutput12V();
+void disableOutput12V(bool force);
+void checkPreemptiveFold();
 
 void inaSetup();
 void inaTrigger();
@@ -466,6 +475,7 @@ void configureServer() {
   // ------------------------------
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     inaPeriod = 2000;
+    previousInaPeriod = inaPeriod;
     inaRead();
     request->send(LittleFS, "/index.html", "text/html");
   });
@@ -660,12 +670,13 @@ void enableOutput12V() {
   digitalWrite(OUTPUT_12V_EN, LOW);
 }
 
-void disableOutput12V() {
-  // only power off if both motors idle and disabled
-  if (!moveFlag[0] && !moveFlag[1]) {
+void disableOutput12V(bool force) {
+  // only power off if both motors idle and disabled (unless forced)
+  if (force || (!moveFlag[0] && !moveFlag[1])) {
     digitalWrite(ENABLE0, HIGH);  // Not necessary with autoenable but just in case there is a delay
     digitalWrite(ENABLE1, HIGH);
     digitalWrite(OUTPUT_12V_EN, HIGH);
+    inaPeriod = previousInaPeriod;
   }
 }
 
@@ -731,6 +742,7 @@ void stop(uint8_t i) {
   delay(20); //forceStop needs about 20ms
   currentPosition[i] = stepper[i]->getCurrentPosition();
   targetPosition[i] = currentPosition[i];
+  moveFlag[i] = false;
 }
 
 void moveDown(uint8_t i) {
@@ -760,80 +772,116 @@ void move(uint8_t i) {
 }
 
 void checkMotors() {
-    for (uint8_t i = 0; i < 2; i++) {
+  for (uint8_t i = 0; i < 2; i++) {
+    if (inaPeriod != 1000 && stepper[i]->isRunning()) {
+      inaPeriod = 1000;
+    }
+    if (moveFlag[i] && (currentMillis - moveStartMillis[i] > 200)) {
+          if (!interruptAttached[i]) {
+              attachInterrupt(i == 0 ? digitalPinToInterrupt(STALL0) : digitalPinToInterrupt(STALL1),
+                              i == 0 ? stallDetected0 : stallDetected1,
+                              RISING);
+              interruptAttached[i] = true;
+          }
+      }
+    // --- Stall threshold adjustment ---
+    if (moveFlag[i] && !homeFlag && !restored_stall_value[i] &&
+        (abs(stepper[i]->targetPos() - stepper[i]->getCurrentPosition()) < 5000 ||
+          stepper[i]->getCurrentPosition() > 5000)) {
+        driver[i].SGTHRS(STALL_VALUE);
+        restored_stall_value[i] = true;
+    } 
 
-      if (moveFlag[i] && (currentMillis - moveStartMillis[i] > 200)) {
-            if (!interruptAttached[i]) {
-                attachInterrupt(i == 0 ? digitalPinToInterrupt(STALL0) : digitalPinToInterrupt(STALL1),
-                               i == 0 ? stallDetected0 : stallDetected1,
-                               RISING);
-                interruptAttached[i] = true;
-            }
-        }
-      // --- Stall threshold adjustment ---
-      if (moveFlag[i] && !homeFlag && !restored_stall_value[i] &&
-          (abs(stepper[i]->targetPos() - stepper[i]->getCurrentPosition()) < 5000 ||
-            stepper[i]->getCurrentPosition() > 5000)) {
-          driver[i].SGTHRS(STALL_VALUE);
-          restored_stall_value[i] = true;
-      } 
+  // Handle stall detection
+    if (stallFlag[i]) {
+      stepper[i]->forceStop();
+      stallFlag[i] = false;
 
-    // Handle stall detection
-      if (stallFlag[i]) {
-        stepper[i]->forceStop();
-        stallFlag[i] = false;
+      // Stall during Phase 2 means we've hit home
+      if (homeFlag && homingPhase[i] == 2) {
+        stepper[i]->setCurrentPosition(0);
+        currentPosition[i] = 0;
 
-        // Stall during Phase 2 means we've hit home
-        if (homeFlag && homingPhase[i] == 2) {
-          stepper[i]->setCurrentPosition(0);
-          currentPosition[i] = 0;
+        // Phase 3: move slightly away from stall zone
+        targetPosition[i] = (i == 0) ? 3000 : -650;
+        move(i);
+        homingPhase[i] = 3;
+      }
+    }
 
-          // Phase 3: move slightly away from stall zone
-          targetPosition[i] = (i == 0) ? 3000 : -650;
+  // Homing logic
+  if (moveFlag[i] && !stepper[i]->isRunning() && currentMillis - moveStartMillis[i] > 20) {
+    if (homeFlag) {
+      switch (homingPhase[i]) {
+        case 0: // Phase 0: pre-homing descent
+          currentPosition[i] = downPosition[i];
+          stepper[i]->setCurrentPosition(currentPosition[i]);
+          targetPosition[i] = (i == 0) ? currentPosition[i] + 5000 : currentPosition[i] - 5000;
           move(i);
-          homingPhase[i] = 3;
-        }
+          homingPhase[i] = 1;
+          break;
+
+        case 1: // Phase 1: move to 0 and wait for stall
+          currentPosition[i] = stepper[i]->getCurrentPosition();
+          targetPosition[i] = 0;
+          move(i);
+          homingPhase[i] = 2;
+          break;
+
+        case 3: // Phase 3: post-homing offset complete
+          homed[i] = true;
+          moveFlag[i] = false;
+          currentPosition[i] = 0;
+          stepper[i]->setCurrentPosition(currentPosition[i]);
+          stepper[i]->setSpeedInHz(speed);
+          if (homed[0] && homed[1]) {
+              homeFlag = false;
+              initialHome = true;
+          }
+          break;
+      }
+    } else {
+      moveFlag[i] = false;
       }
 
-    // Homing logic
-    if (moveFlag[i] && !stepper[i]->isRunning() && currentMillis - moveStartMillis[i] > 20) {
-      if (homeFlag) {
-        switch (homingPhase[i]) {
-          case 0: // Phase 0: pre-homing descent
-            currentPosition[i] = downPosition[i];
-            stepper[i]->setCurrentPosition(currentPosition[i]);
-            targetPosition[i] = (i == 0) ? currentPosition[i] + 5000 : currentPosition[i] - 5000;
-            move(i);
-            homingPhase[i] = 1;
-            break;
+      currentPosition[i] = stepper[i]->getCurrentPosition();
+      disableOutput12V(false);
+      }
+  }
+}
 
-          case 1: // Phase 1: move to 0 and wait for stall
-            currentPosition[i] = stepper[i]->getCurrentPosition();
-            targetPosition[i] = 0;
-            move(i);
-            homingPhase[i] = 2;
-            break;
+void checkPreemptiveFold() {
+  if (!initialHome || homeFlag) {
+    return;
+  }
+  if (moveFlag[0] || moveFlag[1]) {
+    return;
+  }
 
-          case 3: // Phase 3: post-homing offset complete
-            homed[i] = true;
-            moveFlag[i] = false;
-            currentPosition[i] = 0;
-            stepper[i]->setCurrentPosition(currentPosition[i]);
-            stepper[i]->setSpeedInHz(speed);
-            if (homed[0] && homed[1]) {
-                homeFlag = false;
-                initialHome = true;
-            }
-            break;
-        }
-      } else {
-        moveFlag[i] = false;
-        }
+  bool charging = solarChargerEnabled && (pvCurrent > PV_CHARGING_MIN_MA);
+  bool lowSoon = (batterySoC <= PREEMPTIVE_SOC) || (batteryVoltage <= PREEMPTIVE_VOLT);
+  bool recovered = (batterySoC >= PREEMPTIVE_SOC_CLEAR) && (batteryVoltage >= PREEMPTIVE_VOLT_CLEAR);
 
-        currentPosition[i] = stepper[i]->getCurrentPosition();
-        disableOutput12V();
-        }
+  if (preemptiveFoldTriggered) {
+    if (charging || recovered) {
+      preemptiveFoldTriggered = false;
     }
+    return;
+  }
+
+  if (!charging && lowSoon) {
+    bool moved = false;
+    for (uint8_t i = 0; i < 2; i++) {
+      if (abs(currentPosition[i]) > 1000) {
+        moveUp(i);
+        positionReason[i] = "Low Battery Fold";
+        moved = true;
+      }
+    }
+    if (moved) {
+      preemptiveFoldTriggered = true;
+    }
+  }
 }
 
 // =======================
@@ -871,6 +919,12 @@ void inaRead() {
   batteryCurrent = - inaBat.getCurrent_mA();
   pvCurrent = - inaPV.getCurrent_mA();
   lowVoltage = (batteryVoltage < lowVoltageValue);
+  if (lowVoltage) {
+    lowVoltageValue = 11.0f;
+  }
+  else {
+    lowVoltageValue = 9.5f;
+  }
 
   float dt_s = (currentMillis - inaReadMillis) / 1000.0;
 
@@ -1242,7 +1296,7 @@ void handleSave(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_
       } else {
         moveFlag[0] = false;
         moveFlag[1] = false;
-        disableOutput12V();
+        disableOutput12V(false);
       }
     }
   }
@@ -1389,6 +1443,7 @@ void loop() {
 
   if (currentMillis - lastAPIrequestMillis >= lastAPIrequestTimeout) {
     inaPeriod = 20000;
+    previousInaPeriod = inaPeriod;
   }
 
   // // AP auto-off after 20s if no clients
@@ -1411,7 +1466,18 @@ void loop() {
     }
   }
 
+  if (lowVoltage) {
+    for(uint8_t i = 0; i < 2; i++) {
+      if (stepper[i]->isRunning() || moveFlag[i]) {
+        stop(i);
+        positionReason[i] = "Low Voltage Stop";
+      }
+    }
+    disableOutput12V(true);
+  }
+
   if (!lowVoltage || serialDebug) {
+    checkPreemptiveFold();
     if (currentMillis >= checkTimeMillis) {
       if (!chargerInitialized && !moveFlag[0] && !moveFlag[1]) {
         initCharger();
