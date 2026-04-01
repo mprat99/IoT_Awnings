@@ -166,8 +166,13 @@ float LONGITUDE = 2.4328;
 
 // Solar charger times
 time_t sunriseTime, sunsetTime;
-char sunriseStr[6], sunsetStr[6];
+char sunriseStr[6] = "--:--";
+char sunsetStr[6] = "--:--";
+char chargerStartStr[6] = "--:--";
+char chargerStopStr[6] = "--:--";
 bool sunTimesCalculatedToday = false;
+int solarChargerStartOffsetMin = 30;
+int solarChargerStopOffsetMin = 30;
 
 
 
@@ -300,6 +305,11 @@ void IRAM_ATTR stallDetected1();
 void initCharger();
 void connectCharger();
 void disconnectCharger();
+bool isChargerConnected();
+time_t getChargerStartTime();
+time_t getChargerStopTime();
+bool isWithinSolarChargingWindow(time_t now);
+void formatTimeToHHMM(time_t value, char *buffer, size_t len);
 void configureServer();
 void connectToWiFi();
 void printResetReason();
@@ -524,7 +534,7 @@ void configureServer() {
 
   server.on("/config", HTTP_GET, [](AsyncWebServerRequest *request) {
     
-  StaticJsonDocument<512> doc;  // adjust size if you add more fields
+  StaticJsonDocument<768> doc;  // adjust size if you add more fields
 
   doc["currentHour"]         = currentHour;
   doc["currentMinute"]       = currentMinute;
@@ -539,6 +549,8 @@ void configureServer() {
   doc["rainSensorEnabled"]   = rainSensorEnabled;
   doc["output12VEnabled"]    = !digitalRead(OUTPUT_12V_EN);
   doc["solarChargerEnabled"] = solarChargerEnabled;
+  doc["solarChargerStartOffsetMin"] = solarChargerStartOffsetMin;
+  doc["solarChargerStopOffsetMin"]  = solarChargerStopOffsetMin;
 
   char sunriseBuf[16];
   snprintf(sunriseBuf, sizeof(sunriseBuf), "%sh", sunriseStr);
@@ -548,17 +560,23 @@ void configureServer() {
   snprintf(sunsetBuf, sizeof(sunsetBuf), "%sh", sunsetStr);
   doc["sunset"] = sunsetBuf;
 
+  char chargerStartBuf[16];
+  snprintf(chargerStartBuf, sizeof(chargerStartBuf), "%sh", chargerStartStr);
+  doc["chargerStart"] = chargerStartBuf;
+
+  char chargerStopBuf[16];
+  snprintf(chargerStopBuf, sizeof(chargerStopBuf), "%sh", chargerStopStr);
+  doc["chargerStop"] = chargerStopBuf;
+
   doc["timeSynced"]       = timeSynced;
   doc["positionReason0"]  = positionReason[0];   
   doc["positionReason1"]  = positionReason[1];
   doc["moveTime0"]        = moveTimeStr[0];    
   doc["moveTime1"]        = moveTimeStr[1];
 
-  char json[512];
+  char json[768];
   serializeJson(doc, json, sizeof(json));
   request->send(200, "application/json", json);
-
-    request->send(200, "application/json", json);
   });
 
   server.on(
@@ -570,6 +588,31 @@ void configureServer() {
 
   server.on(
     "/saveConfig", HTTP_POST,
+    [](AsyncWebServerRequest *request) {
+    },
+    NULL,
+    handleSave);
+
+  server.on("/solarOffsets", HTTP_GET, [](AsyncWebServerRequest *request) {
+    StaticJsonDocument<256> doc;
+    doc["solarChargerStartOffsetMin"] = solarChargerStartOffsetMin;
+    doc["solarChargerStopOffsetMin"] = solarChargerStopOffsetMin;
+
+    char chargerStartBuf[16];
+    snprintf(chargerStartBuf, sizeof(chargerStartBuf), "%sh", chargerStartStr);
+    doc["chargerStart"] = chargerStartBuf;
+
+    char chargerStopBuf[16];
+    snprintf(chargerStopBuf, sizeof(chargerStopBuf), "%sh", chargerStopStr);
+    doc["chargerStop"] = chargerStopBuf;
+
+    char json[256];
+    serializeJson(doc, json, sizeof(json));
+    request->send(200, "application/json", json);
+  });
+
+  server.on(
+    "/solarOffsets", HTTP_POST,
     [](AsyncWebServerRequest *request) {
     },
     NULL,
@@ -643,23 +686,49 @@ void IRAM_ATTR stallDetected1() {
 void initCharger() {
   disconnectCharger();
   delay(1000);
-  connectCharger();
+  if (solarChargerEnabled && isWithinSolarChargingWindow(time(nullptr))) {
+    connectCharger();
+  }
   chargerInitialized = true;
-  solarChargerEnabled = true;
 }
 
 void connectCharger() {
   digitalWrite(BAT_EN, LOW);
   delay(500);
   digitalWrite(PV_EN, LOW);
-  solarChargerEnabled = true;
 }
 
 void disconnectCharger() {
   digitalWrite(PV_EN, HIGH);
   delay(500);
   digitalWrite(BAT_EN, HIGH);
-  solarChargerEnabled = false;
+}
+
+bool isChargerConnected() {
+  return digitalRead(BAT_EN) == LOW && digitalRead(PV_EN) == LOW;
+}
+
+time_t getChargerStartTime() {
+  return sunriseTime + (solarChargerStartOffsetMin * 60);
+}
+
+time_t getChargerStopTime() {
+  return sunsetTime - (solarChargerStopOffsetMin * 60);
+}
+
+bool isWithinSolarChargingWindow(time_t now) {
+  time_t chargerStartTime = getChargerStartTime();
+  time_t chargerStopTime = getChargerStopTime();
+  if (chargerStartTime >= chargerStopTime) {
+    return false;
+  }
+  return now >= chargerStartTime && now <= chargerStopTime;
+}
+
+void formatTimeToHHMM(time_t value, char *buffer, size_t len) {
+  struct tm timeInfo;
+  localtime_r(&value, &timeInfo);
+  snprintf(buffer, len, "%02d:%02d", timeInfo.tm_hour, timeInfo.tm_min);
 }
 
 void getMoveTimeString(char *buffer, size_t len) {
@@ -858,7 +927,7 @@ void checkPreemptiveFold() {
     return;
   }
 
-  bool charging = solarChargerEnabled && (pvCurrent > PV_CHARGING_MIN_MA);
+  bool charging = isChargerConnected() && (pvCurrent > PV_CHARGING_MIN_MA);
   bool lowSoon = (batterySoC <= PREEMPTIVE_SOC) || (batteryVoltage <= PREEMPTIVE_VOLT);
   bool recovered = (batterySoC >= PREEMPTIVE_SOC_CLEAR) && (batteryVoltage >= PREEMPTIVE_VOLT_CLEAR);
 
@@ -1112,13 +1181,11 @@ void checkTime() {
   }
 
   // ----- Solar charger control -----
-  if (!solarChargerEnabled && (now >= sunriseTime && now <= sunsetTime)) {
+  if (solarChargerEnabled && !isChargerConnected() && isWithinSolarChargingWindow(now)) {
     connectCharger();
-    solarChargerEnabled = true;
   }
-  if (solarChargerEnabled && (now >= sunsetTime || now <= sunriseTime)) {
+  if (isChargerConnected() && (!solarChargerEnabled || !isWithinSolarChargingWindow(now))) {
     disconnectCharger();
-    solarChargerEnabled = false;
   }
 
   if (scheduledAwnings) {
@@ -1211,6 +1278,8 @@ void calculateSunTimes() {
 
   hoursToString(sunriseLocal, sunriseStr);
   hoursToString(sunsetLocal, sunsetStr);
+  formatTimeToHHMM(getChargerStartTime(), chargerStartStr, sizeof(chargerStartStr));
+  formatTimeToHHMM(getChargerStopTime(), chargerStopStr, sizeof(chargerStopStr));
   DEBUG_PRINT("Sunrise: "); DEBUG_PRINTLN(sunriseStr);
   DEBUG_PRINT("Sunset : "); DEBUG_PRINTLN(sunsetStr);
 }
@@ -1287,6 +1356,12 @@ void handleSave(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_
   if (json.containsKey("nightMinute")) nightMinute = json["nightMinute"];
   if (json.containsKey("scheduled")) scheduledAwnings = json["scheduled"];
   if (json.containsKey("rainSensorEnabled")) rainSensorEnabled = json["rainSensorEnabled"];
+  if (json.containsKey("solarChargerStartOffsetMin")) {
+    solarChargerStartOffsetMin = constrain((int)json["solarChargerStartOffsetMin"], 0, 360);
+  }
+  if (json.containsKey("solarChargerStopOffsetMin")) {
+    solarChargerStopOffsetMin = constrain((int)json["solarChargerStopOffsetMin"], 0, 360);
+  }
   if (json.containsKey("output12VEnabled")) {
     bool currentOutput12V = !digitalRead(OUTPUT_12V_EN);
     output12VEnabled = json["output12VEnabled"];
@@ -1305,12 +1380,19 @@ void handleSave(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_
     bool newSolarChargerEnabled = json["solarChargerEnabled"];
     if (solarChargerEnabled != newSolarChargerEnabled) {
       solarChargerEnabled = newSolarChargerEnabled;
-      if (solarChargerEnabled) {
+      if (solarChargerEnabled && isWithinSolarChargingWindow(time(nullptr))) {
         connectCharger();
       } else {
         disconnectCharger();
       }
     }
+  }
+  formatTimeToHHMM(getChargerStartTime(), chargerStartStr, sizeof(chargerStartStr));
+  formatTimeToHHMM(getChargerStopTime(), chargerStopStr, sizeof(chargerStopStr));
+  if (!solarChargerEnabled || !isWithinSolarChargingWindow(time(nullptr))) {
+    disconnectCharger();
+  } else if (!isChargerConnected()) {
+    connectCharger();
   }
   request->send(200, "text/plain", "Changes Applied");
 }

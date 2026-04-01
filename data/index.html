@@ -150,6 +150,32 @@
 
 </div>
 
+    <div class="solar-offsets-panel">
+      <div class="solar-offsets-title">Solar Charger Window</div>
+      <div class="solar-offsets-grid">
+        <div class="solar-offset-card">
+          <div class="solar-offset-label">Turn On</div>
+          <div class="solar-offset-time"><span id="chargerStart">--:--h</span></div>
+          <div class="solar-offset-controls">
+            <button class="offset-button" type="button" onclick="adjustSolarOffset('start', -5)">-</button>
+            <span class="solar-offset-value">+<span id="solarChargerStartOffsetMin">30</span> min</span>
+            <button class="offset-button" type="button" onclick="adjustSolarOffset('start', 5)">+</button>
+          </div>
+          <div class="solar-offset-hint">after sunrise</div>
+        </div>
+        <div class="solar-offset-card">
+          <div class="solar-offset-label">Turn Off</div>
+          <div class="solar-offset-time"><span id="chargerStop">--:--h</span></div>
+          <div class="solar-offset-controls">
+            <button class="offset-button" type="button" onclick="adjustSolarOffset('stop', -5)">-</button>
+            <span class="solar-offset-value">-<span id="solarChargerStopOffsetMin">30</span> min</span>
+            <button class="offset-button" type="button" onclick="adjustSolarOffset('stop', 5)">+</button>
+          </div>
+          <div class="solar-offset-hint">before sunset</div>
+        </div>
+      </div>
+    </div>
+
 
     <div style="display: flex; justify-content: center; align-items: center; margin-bottom: 6em;">
       <button class="button-save" id="saveTime">SAVE</button>
@@ -426,7 +452,9 @@
             nightMinute: config.nightMinute,
             rainSensorEnabled: !!config.rainSensorEnabled,
             output12VEnabled: !!config.output12VEnabled,
-            solarChargerEnabled: !!config.solarChargerEnabled
+            solarChargerEnabled: !!config.solarChargerEnabled,
+            solarChargerStartOffsetMin: config.solarChargerStartOffsetMin ?? 30,
+            solarChargerStopOffsetMin: config.solarChargerStopOffsetMin ?? 30
           };
 
           // Fill UI
@@ -438,6 +466,8 @@
           document.getElementById("rainSensorSwitch").checked = originalConfig.rainSensorEnabled;
           document.getElementById("output12VSwitch").checked = originalConfig.output12VEnabled;
           document.getElementById("solarChargerSwitch").checked = originalConfig.solarChargerEnabled;
+          document.getElementById("solarChargerStartOffsetMin").textContent = originalConfig.solarChargerStartOffsetMin;
+          document.getElementById("solarChargerStopOffsetMin").textContent = originalConfig.solarChargerStopOffsetMin;
           document.getElementById("reason0").textContent = config.positionReason0;
           document.getElementById("reason1").textContent = config.positionReason1;
           document.getElementById("moveTime0").textContent = config.moveTime0;
@@ -445,6 +475,12 @@
           if (config.sunrise.length == 6) {
             document.getElementById("sunrise").textContent = config.sunrise;
             document.getElementById("sunset").textContent = config.sunset;
+          }
+          if (config.chargerStart?.length == 6) {
+            document.getElementById("chargerStart").textContent = config.chargerStart;
+          }
+          if (config.chargerStop?.length == 6) {
+            document.getElementById("chargerStop").textContent = config.chargerStop;
           }
           hideSaveButton(); // reset save button
         } catch (err) {
@@ -461,7 +497,9 @@
           nightMinute: parseInt(document.getElementById("nightMinute").value) || 0,
           rainSensorEnabled: document.getElementById("rainSensorSwitch").checked,
           output12VEnabled: document.getElementById("output12VSwitch").checked,
-          solarChargerEnabled: document.getElementById("solarChargerSwitch").checked
+          solarChargerEnabled: document.getElementById("solarChargerSwitch").checked,
+          solarChargerStartOffsetMin: parseInt(document.getElementById("solarChargerStartOffsetMin").textContent) || 0,
+          solarChargerStopOffsetMin: parseInt(document.getElementById("solarChargerStopOffsetMin").textContent) || 0
         };
 
         // Compare JSON representations
@@ -479,6 +517,37 @@
         document.getElementById("saveTime").hidden = true;
       }
 
+      async function refreshSolarOffsets() {
+        try {
+          const response = await fetch("/solarOffsets");
+          if (!response.ok) throw new Error("Solar offset fetch failed");
+          const config = await response.json();
+          if (typeof config.solarChargerStartOffsetMin === "number") {
+            document.getElementById("solarChargerStartOffsetMin").textContent = config.solarChargerStartOffsetMin;
+          }
+          if (typeof config.solarChargerStopOffsetMin === "number") {
+            document.getElementById("solarChargerStopOffsetMin").textContent = config.solarChargerStopOffsetMin;
+          }
+          if (config.chargerStart?.length === 6) {
+            document.getElementById("chargerStart").textContent = config.chargerStart;
+          }
+          if (config.chargerStop?.length === 6) {
+            document.getElementById("chargerStop").textContent = config.chargerStop;
+          }
+        } catch (err) {
+          console.error("Solar offset refresh error:", err);
+        }
+      }
+
+      function adjustSolarOffset(type, delta) {
+        const elementId = type === "start" ? "solarChargerStartOffsetMin" : "solarChargerStopOffsetMin";
+        const node = document.getElementById(elementId);
+        const currentValue = parseInt(node.textContent) || 0;
+        const nextValue = Math.max(0, Math.min(360, currentValue + delta));
+        node.textContent = nextValue;
+        checkForChanges();
+      }
+
       async function saveConfig() {
         const newConfig = {
           scheduled: document.getElementById("toggleSwitch").checked ? 1 : 0,
@@ -488,7 +557,9 @@
           nightMinute: parseInt(document.getElementById("nightMinute").value) || 0,
           rainSensorEnabled: document.getElementById("rainSensorSwitch").checked ? 1 : 0,
           output12VEnabled: document.getElementById("output12VSwitch").checked ? 1 : 0,
-          solarChargerEnabled: document.getElementById("solarChargerSwitch").checked ? 1 : 0
+          solarChargerEnabled: document.getElementById("solarChargerSwitch").checked ? 1 : 0,
+          solarChargerStartOffsetMin: parseInt(document.getElementById("solarChargerStartOffsetMin").textContent) || 0,
+          solarChargerStopOffsetMin: parseInt(document.getElementById("solarChargerStopOffsetMin").textContent) || 0
         };
 
         try {
@@ -500,7 +571,19 @@
           if (!response.ok) throw new Error("Save failed");
 
           // Refresh originalConfig and hide save button
-          originalConfig = { ...newConfig, automaticDayNight: !!newConfig.scheduled };
+          originalConfig = {
+            automaticDayNight: !!newConfig.scheduled,
+            morningHour: newConfig.morningHour,
+            morningMinute: newConfig.morningMinute,
+            nightHour: newConfig.nightHour,
+            nightMinute: newConfig.nightMinute,
+            rainSensorEnabled: !!newConfig.rainSensorEnabled,
+            output12VEnabled: !!newConfig.output12VEnabled,
+            solarChargerEnabled: !!newConfig.solarChargerEnabled,
+            solarChargerStartOffsetMin: newConfig.solarChargerStartOffsetMin,
+            solarChargerStopOffsetMin: newConfig.solarChargerStopOffsetMin
+          };
+          await refreshSolarOffsets();
           hideSaveButton();
         } catch (err) {
           console.error("Save error:", err);

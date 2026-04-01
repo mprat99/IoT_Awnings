@@ -143,9 +143,88 @@ input:disabled {
   display: flex;
   justify-content: center;
   gap: 2.5em;
-  align-items: center;
+  align-items: flex-start;
   margin-top: 3em;
   margin-bottom: 1em;
+  flex-wrap: wrap;
+}
+
+.solar-offsets-panel {
+  max-width: 34rem;
+  margin: 1.5em auto 0 auto;
+  padding: 1em 1.25em;
+  border: 1px solid #d9d9d9;
+  border-radius: 14px;
+  background: #fafafa;
+}
+
+.solar-offsets-title {
+  text-align: center;
+  font-size: 1rem;
+  margin-bottom: 0.9em;
+  color: #444;
+}
+
+.solar-offsets-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(12rem, 1fr));
+  gap: 0.9em;
+}
+
+.solar-offset-card {
+  text-align: center;
+  padding: 0.9em;
+  border-radius: 12px;
+  background: white;
+  border: 1px solid #e3e3e3;
+}
+
+.solar-offset-label {
+  font-size: 0.95rem;
+  color: #666;
+  margin-bottom: 0.35em;
+}
+
+.solar-offset-time {
+  font-size: 1.2rem;
+  margin-bottom: 0.7em;
+}
+
+.solar-offset-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75em;
+}
+
+.solar-offset-value {
+  min-width: 5.5em;
+  text-align: center;
+  color: #555;
+}
+
+.offset-button {
+  width: 2em;
+  height: 2em;
+  border-radius: 999px;
+  border: 2px solid #555;
+  background: white;
+  color: #111;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.solar-offset-hint {
+  margin-top: 0.65em;
+  font-size: 0.8rem;
+  color: #9a9a9a;
+}
+
+@media (max-width: 700px) {
+  .solar-offsets-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 #rain-container {
