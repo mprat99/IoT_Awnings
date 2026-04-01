@@ -172,3 +172,41 @@ input:disabled {
     transform: translateY(100vh);
   }
 }
+
+.update-link {
+  color: #2196F3;
+  text-decoration: none;
+  font-size: 1rem;
+}
+
+.update-link:hover {
+  text-decoration: underline;
+}
+
+.update-shell {
+  width: min(900px, 92%);
+  margin: 0 auto;
+}
+
+.update-card {
+  border: 1px solid #d9d9d9;
+  border-radius: 16px;
+  padding: 1.5em;
+  margin-bottom: 1.5em;
+  background-color: #fafafa;
+}
+
+.update-card h2 {
+  margin-top: 0;
+}
+
+.update-input {
+  display: block;
+  width: 100%;
+  margin: 1em 0;
+}
+
+.update-button {
+  margin-left: 0;
+  margin-right: 0;
+}

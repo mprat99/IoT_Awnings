@@ -13,6 +13,7 @@
 #include <Wire.h>
 #include <INA226_WE.h>
 #include "LittleFS.h"
+#include <Update.h>
 #include "esp_log.h"
 #include <SolarCalculator.h>
 #include <Ticker.h>
@@ -124,6 +125,8 @@ IPAddress primaryDNS(8, 8, 8, 8);      // Primary DNS
 IPAddress secondaryDNS(8, 8, 4, 4);    // Secondary DNS
 
 AsyncWebServer server(80);
+const char *otaUser = "admin";
+const char *otaPassword = "admin";
 
 const int ssidMaxSize = 32;
 const int passwordMaxSize = 64;
@@ -304,6 +307,9 @@ void configureServer();
 void connectToWiFi();
 void printResetReason();
 bool checkInternet();
+bool ensureUpdateAuth(AsyncWebServerRequest *request);
+void handleFirmwareUpdateUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final);
+void handleFilesystemUpdateUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final);
 
 void getMoveTimeString();
 
@@ -487,6 +493,50 @@ void configureServer() {
     request->send(LittleFS, "/style.css", "text/css");
   });
 
+  server.on("/update", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (!ensureUpdateAuth(request)) {
+      return;
+    }
+    request->send(LittleFS, "/update.html", "text/html");
+  });
+
+  server.on("/update.html", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (!ensureUpdateAuth(request)) {
+      return;
+    }
+    request->send(LittleFS, "/update.html", "text/html");
+  });
+
+  server.on(
+    "/update/firmware", HTTP_POST,
+    [](AsyncWebServerRequest *request) {
+      if (!ensureUpdateAuth(request)) {
+        return;
+      }
+
+      bool success = !Update.hasError();
+      request->send(success ? 200 : 500, "text/plain", success ? "Firmware update OK. Rebooting..." : "Firmware update failed");
+      if (success) {
+        restartTimer.once(1.0, scheduleRestart);
+      }
+    },
+    handleFirmwareUpdateUpload);
+
+  server.on(
+    "/update/filesystem", HTTP_POST,
+    [](AsyncWebServerRequest *request) {
+      if (!ensureUpdateAuth(request)) {
+        return;
+      }
+
+      bool success = !Update.hasError();
+      request->send(success ? 200 : 500, "text/plain", success ? "Filesystem update OK. Rebooting..." : "Filesystem update failed");
+      if (success) {
+        restartTimer.once(1.0, scheduleRestart);
+      }
+    },
+    handleFilesystemUpdateUpload);
+
   // ------------------------------
   // Serve sensor/data JSON
   // ------------------------------
@@ -621,6 +671,72 @@ void configureServer() {
 
 void scheduleRestart() {
   ESP.restart();
+}
+
+bool ensureUpdateAuth(AsyncWebServerRequest *request) {
+  if (request->authenticate(otaUser, otaPassword)) {
+    return true;
+  }
+
+  request->requestAuthentication();
+  return false;
+}
+
+void handleFirmwareUpdateUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+  if (!request->authenticate(otaUser, otaPassword)) {
+    if (index == 0) {
+      request->requestAuthentication();
+    }
+    return;
+  }
+
+  if (index == 0) {
+    DEBUG_PRINTF("OTA firmware upload start: %s\n", filename.c_str());
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
+      Update.printError(Serial);
+    }
+  }
+
+  if (len > 0 && Update.write(data, len) != len) {
+    Update.printError(Serial);
+  }
+
+  if (final) {
+    if (Update.end(true)) {
+      DEBUG_PRINTF("OTA firmware upload complete: %s, %u bytes\n", filename.c_str(), index + len);
+    } else {
+      Update.printError(Serial);
+    }
+  }
+}
+
+void handleFilesystemUpdateUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+  if (!request->authenticate(otaUser, otaPassword)) {
+    if (index == 0) {
+      request->requestAuthentication();
+    }
+    return;
+  }
+
+  if (index == 0) {
+    DEBUG_PRINTF("OTA filesystem upload start: %s\n", filename.c_str());
+    LittleFS.end();
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_SPIFFS)) {
+      Update.printError(Serial);
+    }
+  }
+
+  if (len > 0 && Update.write(data, len) != len) {
+    Update.printError(Serial);
+  }
+
+  if (final) {
+    if (Update.end(true)) {
+      DEBUG_PRINTF("OTA filesystem upload complete: %s, %u bytes\n", filename.c_str(), index + len);
+    } else {
+      Update.printError(Serial);
+    }
+  }
 }
 
 // =======================

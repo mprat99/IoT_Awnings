@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Kitchen Awnings OTA</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" type="text/css" href="/style.css">
+  </head>
+  <body>
+    <div style="display: flex; justify-content: center; margin-bottom: 1em">
+      <h1>OTA Update</h1>
+    </div>
+
+    <div class="update-shell">
+      <div class="update-card">
+        <h2>Firmware</h2>
+        <p>Upload the compiled app binary for the ESP32 firmware.</p>
+        <form method="POST" action="/update/firmware" enctype="multipart/form-data">
+          <input class="update-input" type="file" name="update" accept=".bin" required>
+          <button class="button update-button" type="submit">UPLOAD FIRMWARE</button>
+        </form>
+      </div>
+
+      <div class="update-card">
+        <h2>Web Filesystem</h2>
+        <p>Upload the LittleFS image that contains <code>index.html</code> and <code>style.css</code>.</p>
+        <form method="POST" action="/update/filesystem" enctype="multipart/form-data">
+          <input class="update-input" type="file" name="update" accept=".bin" required>
+          <button class="button update-button" type="submit">UPLOAD LITTLEFS</button>
+        </form>
+      </div>
+    </div>
+
+    <div style="display: flex; justify-content: center; margin-top: 2em;">
+      <a class="update-link" href="/">Back to main control page</a>
+    </div>
+  </body>
+</html>
