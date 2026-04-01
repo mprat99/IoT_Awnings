@@ -221,9 +221,80 @@ input:disabled {
   color: #9a9a9a;
 }
 
+.wifi-panel {
+  max-width: 46rem;
+  margin: 1.25em auto 0 auto;
+  padding: 1em 1.25em;
+  border: 1px solid #d9d9d9;
+  border-radius: 14px;
+  background: #fafafa;
+}
+
+.wifi-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1em;
+}
+
+.wifi-hint {
+  margin-top: 0.6em;
+  color: #7a7a7a;
+  text-align: center;
+}
+
+.wifi-list {
+  margin-top: 1em;
+  display: grid;
+  gap: 0.7em;
+}
+
+.wifi-network {
+  width: 100%;
+  border: 1px solid #dedede;
+  border-radius: 12px;
+  background: white;
+  padding: 0.9em 1em;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wifi-network:hover {
+  border-color: #2196F3;
+  background: #f4faff;
+}
+
+.wifi-network-name {
+  display: block;
+  font-size: 1rem;
+  color: #111;
+}
+
+.wifi-network-meta {
+  display: block;
+  margin-top: 0.3em;
+  color: #7a7a7a;
+  font-size: 0.9rem;
+}
+
+.wifi-empty {
+  text-align: center;
+  color: #7a7a7a;
+  padding: 1em;
+}
+
+.wifi-refresh-button {
+  margin: 0;
+  min-width: 6em;
+}
+
 @media (max-width: 700px) {
   .solar-offsets-grid {
     grid-template-columns: 1fr;
+  }
+
+  .wifi-panel-header {
+    flex-direction: column;
   }
 }
 

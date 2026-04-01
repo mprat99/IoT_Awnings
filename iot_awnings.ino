@@ -598,7 +598,7 @@ void configureServer() {
   doc["nightMinute"]         = nightMinute;
   doc["rainSensorEnabled"]   = rainSensorEnabled;
   doc["output12VEnabled"]    = !digitalRead(OUTPUT_12V_EN);
-  doc["solarChargerEnabled"] = solarChargerEnabled;
+  doc["solarChargerEnabled"] = isChargerConnected();
   doc["solarChargerStartOffsetMin"] = solarChargerStartOffsetMin;
   doc["solarChargerStopOffsetMin"]  = solarChargerStopOffsetMin;
 
@@ -659,6 +659,32 @@ void configureServer() {
     char json[256];
     serializeJson(doc, json, sizeof(json));
     request->send(200, "application/json", json);
+  });
+
+  server.on("/wifiScan", HTTP_GET, [](AsyncWebServerRequest *request) {
+    lastAPIrequestMillis = currentMillis;
+
+    int networkCount = WiFi.scanNetworks(false, true);
+    DynamicJsonDocument doc(2048);
+    JsonArray networks = doc.createNestedArray("networks");
+
+    for (int i = 0; i < networkCount; i++) {
+      String networkSsid = WiFi.SSID(i);
+      if (networkSsid.length() == 0) {
+        continue;
+      }
+
+      JsonObject network = networks.createNestedObject();
+      network["ssid"] = networkSsid;
+      network["rssi"] = WiFi.RSSI(i);
+      network["secure"] = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+    }
+
+    WiFi.scanDelete();
+
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
   });
 
   server.on(
@@ -1103,6 +1129,9 @@ void inaRead() {
   batteryVoltage = inaBat.getBusVoltage_V();
   batteryCurrent = - inaBat.getCurrent_mA();
   pvCurrent = - inaPV.getCurrent_mA();
+  if (!isChargerConnected()) {
+    pvCurrent = 0.0f;
+  }
   lowVoltage = (batteryVoltage < lowVoltageValue);
   if (lowVoltage) {
     lowVoltageValue = 11.0f;
@@ -1494,22 +1523,17 @@ void handleSave(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_
 
   if (json.containsKey("solarChargerEnabled")) {
     bool newSolarChargerEnabled = json["solarChargerEnabled"];
-    if (solarChargerEnabled != newSolarChargerEnabled) {
-      solarChargerEnabled = newSolarChargerEnabled;
-      if (solarChargerEnabled && isWithinSolarChargingWindow(time(nullptr))) {
+    if (isChargerConnected() != newSolarChargerEnabled) {
+      if (newSolarChargerEnabled) {
         connectCharger();
       } else {
         disconnectCharger();
       }
     }
+    solarChargerEnabled = newSolarChargerEnabled;
   }
   formatTimeToHHMM(getChargerStartTime(), chargerStartStr, sizeof(chargerStartStr));
   formatTimeToHHMM(getChargerStopTime(), chargerStopStr, sizeof(chargerStopStr));
-  if (!solarChargerEnabled || !isWithinSolarChargingWindow(time(nullptr))) {
-    disconnectCharger();
-  } else if (!isChargerConnected()) {
-    connectCharger();
-  }
   request->send(200, "text/plain", "Changes Applied");
 }
 

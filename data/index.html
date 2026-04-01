@@ -219,6 +219,17 @@
       <input style="margin-left: 1em; border-radius: 0.5em; text-align: center; width: 35%" placeholder="Password" type="password" id="password">
     </div>
 
+    <div class="wifi-panel">
+      <div class="wifi-panel-header">
+        <span>Available networks</span>
+        <button class="button-save wifi-refresh-button" type="button" id="scanWifi">SCAN</button>
+      </div>
+      <div class="wifi-hint">Select a network or type the SSID manually.</div>
+      <div class="wifi-list" id="wifiList">
+        <div class="wifi-empty">No scan yet.</div>
+      </div>
+    </div>
+
     <div style="display: flex; justify-content: center;">
       <span style="margin-bottom: 1em; margin-top: 1em">IP Address: <span id="ipAddress">192.168.1.155</span></span>
     </div>
@@ -329,6 +340,70 @@
         xhr.open("POST", "/saveWifi");
         xhr.setRequestHeader("Content-Type", "application/json");
         xhr.send(JSON.stringify({ ssid, password }));
+      }
+
+      function escapeHtml(value) {
+        return value
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#39;");
+      }
+
+      function renderWifiNetworks(networks) {
+        const wifiList = document.getElementById("wifiList");
+
+        if (!Array.isArray(networks) || networks.length === 0) {
+          wifiList.innerHTML = '<div class="wifi-empty">No networks found.</div>';
+          return;
+        }
+
+        const markup = networks
+          .sort((a, b) => (b.rssi ?? -999) - (a.rssi ?? -999))
+          .map(network => {
+            const ssid = String(network.ssid || "");
+            const escapedSsid = escapeHtml(ssid);
+            const signal = `${network.rssi ?? "?"} dBm`;
+            const security = network.secure ? "Protected" : "Open";
+            return `
+              <button class="wifi-network" type="button" data-ssid="${escapedSsid}">
+                <span class="wifi-network-name">${escapedSsid}</span>
+                <span class="wifi-network-meta">${signal} · ${security}</span>
+              </button>
+            `;
+          })
+          .join("");
+
+        wifiList.innerHTML = markup;
+
+        wifiList.querySelectorAll(".wifi-network").forEach(button => {
+          button.addEventListener("click", () => {
+            document.getElementById("ssid").value = button.dataset.ssid || "";
+          });
+        });
+      }
+
+      async function scanWifiNetworks() {
+        const scanButton = document.getElementById("scanWifi");
+        const wifiList = document.getElementById("wifiList");
+
+        scanButton.disabled = true;
+        scanButton.textContent = "SCANNING";
+        wifiList.innerHTML = '<div class="wifi-empty">Scanning nearby WiFi...</div>';
+
+        try {
+          const response = await fetch("/wifiScan");
+          if (!response.ok) throw new Error("WiFi scan failed");
+          const payload = await response.json();
+          renderWifiNetworks(payload.networks || []);
+        } catch (err) {
+          console.error("WiFi scan error:", err);
+          wifiList.innerHTML = '<div class="wifi-empty">Scan failed. You can still enter the SSID manually.</div>';
+        } finally {
+          scanButton.disabled = false;
+          scanButton.textContent = "SCAN";
+        }
       }
 
       // animate fill from current percentage
@@ -607,6 +682,7 @@
         document.getElementById("solarChargerSwitch").addEventListener("change", checkForChanges);
 
         document.getElementById("saveTime").addEventListener("click", saveConfig);
+        document.getElementById("scanWifi").addEventListener("click", scanWifiNetworks);
       });
 
       function resetESP() {
