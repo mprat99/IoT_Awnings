@@ -309,6 +309,7 @@ void initCharger();
 void connectCharger();
 void disconnectCharger();
 bool isChargerConnected();
+time_t roundTimeToNearestMinute(time_t value);
 time_t getChargerStartTime();
 time_t getChargerStopTime();
 bool isWithinSolarChargingWindow(time_t now);
@@ -848,6 +849,10 @@ void disconnectCharger() {
 
 bool isChargerConnected() {
   return digitalRead(BAT_EN) == LOW && digitalRead(PV_EN) == LOW;
+}
+
+time_t roundTimeToNearestMinute(time_t value) {
+  return ((value + 30) / 60) * 60;
 }
 
 time_t getChargerStartTime() {
@@ -1408,7 +1413,7 @@ void calculateSunTimes() {
     sunriseTm.tm_hour = (int)sunriseLocal;
     sunriseTm.tm_min  = (int)((sunriseLocal - sunriseTm.tm_hour) * 60);
     sunriseTm.tm_sec  = (int)((((sunriseLocal - sunriseTm.tm_hour) * 60) - sunriseTm.tm_min) * 60);
-    sunriseTime = mktime(&sunriseTm);
+    sunriseTime = roundTimeToNearestMinute(mktime(&sunriseTm));
   }
 
   {
@@ -1416,13 +1421,13 @@ void calculateSunTimes() {
     sunsetTm.tm_hour = (int)sunsetLocal;
     sunsetTm.tm_min  = (int)((sunsetLocal - sunsetTm.tm_hour) * 60);
     sunsetTm.tm_sec  = (int)((((sunsetLocal - sunsetTm.tm_hour) * 60) - sunsetTm.tm_min) * 60);
-    sunsetTime = mktime(&sunsetTm);
+    sunsetTime = roundTimeToNearestMinute(mktime(&sunsetTm));
   }
 
   DEBUG_PRINT("Sunrise: "); DEBUG_PRINTLN(sunsetTime);
 
-  hoursToString(sunriseLocal, sunriseStr);
-  hoursToString(sunsetLocal, sunsetStr);
+  formatTimeToHHMM(sunriseTime, sunriseStr, sizeof(sunriseStr));
+  formatTimeToHHMM(sunsetTime, sunsetStr, sizeof(sunsetStr));
   formatTimeToHHMM(getChargerStartTime(), chargerStartStr, sizeof(chargerStartStr));
   formatTimeToHHMM(getChargerStopTime(), chargerStopStr, sizeof(chargerStopStr));
   DEBUG_PRINT("Sunrise: "); DEBUG_PRINTLN(sunriseStr);
@@ -1523,17 +1528,18 @@ void handleSave(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_
 
   if (json.containsKey("solarChargerEnabled")) {
     bool newSolarChargerEnabled = json["solarChargerEnabled"];
-    if (isChargerConnected() != newSolarChargerEnabled) {
-      if (newSolarChargerEnabled) {
-        connectCharger();
-      } else {
-        disconnectCharger();
-      }
-    }
     solarChargerEnabled = newSolarChargerEnabled;
   }
   formatTimeToHHMM(getChargerStartTime(), chargerStartStr, sizeof(chargerStartStr));
   formatTimeToHHMM(getChargerStopTime(), chargerStopStr, sizeof(chargerStopStr));
+  time_t now = time(nullptr);
+  if (solarChargerEnabled && isWithinSolarChargingWindow(now)) {
+    if (!isChargerConnected()) {
+      connectCharger();
+    }
+  } else if (isChargerConnected()) {
+    disconnectCharger();
+  }
   request->send(200, "text/plain", "Changes Applied");
 }
 
