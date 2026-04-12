@@ -3,31 +3,36 @@
   <head>
     <title>Kitchen Awnings</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" type="text/css" href="/style.css">
+    <link rel="stylesheet" type="text/css" href="style.css">
   </head>
   <body>
+    <div class="page">
     <div id="rain-container" style="display: none;"></div>
     <div style="display: flex; justify-content: center; margin-bottom: 1em">
       <h1>Kitchen Awnings</h1>
     </div>
 
     <!-- Battery info -->
-    <div class="top-info">
-    <span>Battery: <span id="batterySoC">-</span> %</span>&nbsp;&nbsp;|&nbsp;&nbsp;
-    <span>Capacity: <span id="currentCapacity_mAh">-</span> / <span id="estimatedCapacity_mAh">-</span> mAh</span>&nbsp;&nbsp;|&nbsp;&nbsp;
-    <span>Charged Today: <span id="chargedToday">-</span> mAh</span>&nbsp;&nbsp;|&nbsp;&nbsp;
-    <span>Discharged Today: <span id="dischargedToday">-</span> mAh</span>&nbsp;&nbsp;|&nbsp;&nbsp;
-    <span>PV Today: <span id="pvToday">-</span> mAh</span>&nbsp;&nbsp;|&nbsp;&nbsp;
-    <span>Battery Voltage: <span id="batteryVoltage">-</span> V</span>&nbsp;&nbsp;|&nbsp;&nbsp;
-    <span>Battery Current: <span id="batteryCurrent">-</span> mA</span>&nbsp;&nbsp;|&nbsp;&nbsp;
-    <span>PV Current: <span id="pvCurrent">-</span> mA</span>&nbsp;&nbsp;|&nbsp;&nbsp;
-    <span>Load Current: <span id="loadCurrent">-</span> mA</span>
-  </div>
+    <div class="top-info two-columns">
+      <div class="stat-col">
+        <div class="stat"><span class="stat-label">Battery</span><span class="stat-value"><span id="batterySoC">-</span>&nbsp;%</span></div>
+        <div class="stat"><span class="stat-label">Battery Voltage</span><span class="stat-value"><span id="batteryVoltage">-</span>&nbsp;V</span></div>
+        <div class="stat"><span class="stat-label">Battery Current</span><span class="stat-value"><span id="batteryCurrent">-</span>&nbsp;mA</span></div>
+        <div class="stat"><span class="stat-label">PV Current</span><span class="stat-value"><span id="pvCurrent">-</span>&nbsp;mA</span></div>
+        <div class="stat"><span class="stat-label">Load Current</span><span class="stat-value"><span id="loadCurrent">-</span>&nbsp;mA</span></div>
+      </div>
+      <div class="stat-col">
+        <div class="stat"><span class="stat-label">Capacity</span><span class="stat-value"><span id="currentCapacity_mAh">-</span>&nbsp;/&nbsp;<span id="estimatedCapacity_mAh">-</span>&nbsp;<span class="stat-unit">mAh</span></span></div>
+        <div class="stat"><span class="stat-label">PV Today</span><span class="stat-value"><span id="pvToday">-</span>&nbsp;<span class="stat-unit">mAh</span></span></div>
+        <div class="stat"><span class="stat-label">Charged Today</span><span class="stat-value"><span id="chargedToday">-</span>&nbsp;<span class="stat-unit">mAh</span></span></div>
+        <div class="stat"><span class="stat-label">Discharged Today</span><span class="stat-value"><span id="dischargedToday">-</span>&nbsp;<span class="stat-unit">mAh</span></span></div>
+      </div>
+    </div>
 
 
     <!-- Control buttons -->
     <div style="display: flex; justify-content: center;">
-      <table style="table-layout: fixed;">
+      <table class="control-table" style="table-layout: fixed;">
         <tr>
           <td><button class="button" id="up0" onclick="buttonClick(this)">UP</button></td>
           <td><button class="button" id="up1" onclick="buttonClick(this)">UP</button></td>
@@ -95,7 +100,7 @@
         <input class="time" type="number" id="morningHour">
         <span>:</span>
         <input class="time" type="number" id="morningMinute">
-        <span style="margin-left: 0.5em;">h</span>
+        <span style="margin-left: 0.2em;">h</span>
       </div>
       <div style="color: lightgrey; font-size: 0.55em; margin-top: 1em; margin-left: -2em;">
         Sunrise: <span id="sunrise">--:--h</span>
@@ -108,7 +113,7 @@
         <input class="time" type="number" id="nightHour">
         <span>:</span>
         <input class="time" type="number" id="nightMinute">
-        <span style="margin-left: 0.5em;">h</span>
+        <span style="margin-left: 0.2em;">h</span>
       </div>
       <div style="color: lightgrey; font-size: 0.55em; margin-top: 1em; margin-left: -2em;">
         Sunset: <span id="sunset">--:--h</span>
@@ -254,6 +259,8 @@
       <a class="update-link" href="/update">OTA UPDATE</a>
     </div>
 
+    </div>
+    </div>
     <script>
       const awningPosition = [0, 0];
       const distance = [0, 0];
@@ -463,15 +470,15 @@
 
           // Update static info
           setText("batteryVoltage", data.batteryVoltage.toFixed(2));
-          setText("batteryCurrent", data.batteryCurrent.toFixed(2));
-          setText("pvCurrent", data.pvCurrent.toFixed(2));
-          setText("batterySoC", data.batterySoC.toFixed(2));
+          setText("batteryCurrent", data.batteryCurrent.toFixed(0));
+          setText("pvCurrent", data.pvCurrent.toFixed(0));
+          setText("batterySoC", data.batterySoC.toFixed(0));
           setText("currentCapacity_mAh", data.currentCapacity_mAh.toFixed(0));
           setText("estimatedCapacity_mAh", data.estimatedCapacity_mAh.toFixed(0));
-          setText("chargedToday", data.chargedToday.toFixed(2));
-          setText("dischargedToday", data.dischargedToday.toFixed(2));
-          setText("pvToday", data.pvToday.toFixed(2));
-          setText("loadCurrent", (data.pvCurrent - data.batteryCurrent).toFixed(2));
+          setText("chargedToday", data.chargedToday.toFixed(0));
+          setText("dischargedToday", data.dischargedToday.toFixed(0));
+          setText("pvToday", data.pvToday.toFixed(0));
+          setText("loadCurrent", (data.pvCurrent - data.batteryCurrent).toFixed(0));
           raining = data.raining;
           updateRainStatus(raining);
           if (typeof data.chargerConnected !== "undefined") {

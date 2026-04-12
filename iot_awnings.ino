@@ -11,6 +11,7 @@
 #include <EEPROM.h>
 #include <Preferences.h>
 #include <WiFiClient.h>
+#include <ESPmDNS.h>
 #include <Wire.h>
 #include <INA226_WE.h>
 #include "LittleFS.h"
@@ -199,6 +200,7 @@ bool solarChargerEnabled = true;
 bool solarChargerAuto = true;
 bool output12VEnabled = true;
 bool bootUpSunCheck = false;
+bool mdnsStarted = false;
 // bool highCPU          = false;
 bool preemptiveFoldTriggered = false;
 
@@ -1714,6 +1716,12 @@ void connectToWiFi() {
       DEBUG_PRINTLN("Connected to WiFi");
       DEBUG_PRINTLN(WiFi.localIP());
       localIp = WiFi.localIP();
+      if (!mdnsStarted) {
+        if (MDNS.begin("awnings")) {
+          MDNS.addService("http", "tcp", 80);
+          mdnsStarted = true;
+        }
+      }
       // NTP
 
       configTime(0, 0, "pool.ntp.org");
