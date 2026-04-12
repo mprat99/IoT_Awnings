@@ -14,7 +14,7 @@
     <!-- Battery info -->
     <div class="top-info">
     <span>Battery: <span id="batterySoC">-</span> %</span>&nbsp;&nbsp;|&nbsp;&nbsp;
-    <span>Capacity: <span id="currentCapacity_mAh">-</span> / 3300 mAh</span>&nbsp;&nbsp;|&nbsp;&nbsp;
+    <span>Capacity: <span id="currentCapacity_mAh">-</span> / <span id="estimatedCapacity_mAh">-</span> mAh</span>&nbsp;&nbsp;|&nbsp;&nbsp;
     <span>Charged Today: <span id="chargedToday">-</span> mAh</span>&nbsp;&nbsp;|&nbsp;&nbsp;
     <span>Discharged Today: <span id="dischargedToday">-</span> mAh</span>&nbsp;&nbsp;|&nbsp;&nbsp;
     <span>PV Today: <span id="pvToday">-</span> mAh</span>&nbsp;&nbsp;|&nbsp;&nbsp;
@@ -152,6 +152,14 @@
 
     <div class="solar-offsets-panel">
       <div class="solar-offsets-title">Solar Charger Window</div>
+      <div class="solar-mode-inline">
+        <div class="solar-mode-inline-label">Solar Mode</div>
+        <label class="switch">
+          <input type="checkbox" id="solarModeSwitch">
+          <span class="slider round"></span>
+        </label>
+        <div class="solar-mode-inline-hint"><span id="solarModeText">Auto</span></div>
+      </div>
       <div class="solar-offsets-grid">
         <div class="solar-offset-card">
           <div class="solar-offset-label">Turn On</div>
@@ -448,18 +456,31 @@
           if (!response.ok) throw new Error("Network response not ok");
           const data = await response.json();
 
+          const setText = (id, value) => {
+            const node = document.getElementById(id);
+            if (node) node.textContent = value;
+          };
+
           // Update static info
-          document.getElementById("batteryVoltage").textContent   = data.batteryVoltage.toFixed(2);
-          document.getElementById("batteryCurrent").textContent   = data.batteryCurrent.toFixed(2);
-          document.getElementById("pvCurrent").textContent        = data.pvCurrent.toFixed(2);
-          document.getElementById("batterySoC").textContent       = data.batterySoC.toFixed(2);
-          document.getElementById("currentCapacity_mAh").textContent  = data.currentCapacity_mAh.toFixed(0);
-          document.getElementById("chargedToday").textContent  = data.chargedToday.toFixed(2);
-          document.getElementById("dischargedToday").textContent  = data.dischargedToday.toFixed(2);
-          document.getElementById("pvToday").textContent  = data.pvToday.toFixed(2);
-          document.getElementById("loadCurrent").textContent      = (data.pvCurrent - data.batteryCurrent).toFixed(2);
+          setText("batteryVoltage", data.batteryVoltage.toFixed(2));
+          setText("batteryCurrent", data.batteryCurrent.toFixed(2));
+          setText("pvCurrent", data.pvCurrent.toFixed(2));
+          setText("batterySoC", data.batterySoC.toFixed(2));
+          setText("currentCapacity_mAh", data.currentCapacity_mAh.toFixed(0));
+          setText("estimatedCapacity_mAh", data.estimatedCapacity_mAh.toFixed(0));
+          setText("chargedToday", data.chargedToday.toFixed(2));
+          setText("dischargedToday", data.dischargedToday.toFixed(2));
+          setText("pvToday", data.pvToday.toFixed(2));
+          setText("loadCurrent", (data.pvCurrent - data.batteryCurrent).toFixed(2));
           raining = data.raining;
           updateRainStatus(raining);
+          if (typeof data.chargerConnected !== "undefined") {
+            const chargerConnected = !!data.chargerConnected;
+            const solarModeAuto = document.getElementById("solarModeSwitch").checked;
+            if (solarModeAuto) {
+              document.getElementById("solarChargerSwitch").checked = chargerConnected;
+            }
+          }
 
           distance[0] = data.dist0;
           distance[1] = data.dist1;
@@ -531,6 +552,8 @@
             rainSensorEnabled: !!config.rainSensorEnabled,
             output12VEnabled: !!config.output12VEnabled,
             solarChargerEnabled: !!config.solarChargerEnabled,
+            solarChargerAuto: !!config.solarChargerAuto,
+            chargerConnected: !!config.chargerConnected,
             solarChargerStartOffsetMin: config.solarChargerStartOffsetMin ?? 30,
             solarChargerStopOffsetMin: config.solarChargerStopOffsetMin ?? 30
           };
@@ -543,7 +566,13 @@
           document.getElementById("nightMinute").value    = String(originalConfig.nightMinute).padStart(2, "0");
           document.getElementById("rainSensorSwitch").checked = originalConfig.rainSensorEnabled;
           document.getElementById("output12VSwitch").checked = originalConfig.output12VEnabled;
-          document.getElementById("solarChargerSwitch").checked = originalConfig.solarChargerEnabled;
+          const chargerSwitch = document.getElementById("solarChargerSwitch");
+          const solarModeSwitch = document.getElementById("solarModeSwitch");
+          solarModeSwitch.checked = originalConfig.solarChargerAuto;
+          updateSolarModeUI();
+          chargerSwitch.checked = originalConfig.solarChargerAuto
+            ? !!config.chargerConnected
+            : originalConfig.solarChargerEnabled;
           document.getElementById("solarChargerStartOffsetMin").textContent = originalConfig.solarChargerStartOffsetMin;
           document.getElementById("solarChargerStopOffsetMin").textContent = originalConfig.solarChargerStopOffsetMin;
           document.getElementById("reason0").textContent = config.positionReason0;
@@ -575,7 +604,10 @@
           nightMinute: parseInt(document.getElementById("nightMinute").value) || 0,
           rainSensorEnabled: document.getElementById("rainSensorSwitch").checked,
           output12VEnabled: document.getElementById("output12VSwitch").checked,
-          solarChargerEnabled: document.getElementById("solarChargerSwitch").checked,
+          solarChargerAuto: document.getElementById("solarModeSwitch").checked,
+          solarChargerEnabled: document.getElementById("solarModeSwitch").checked
+            ? originalConfig.solarChargerEnabled
+            : document.getElementById("solarChargerSwitch").checked,
           solarChargerStartOffsetMin: parseInt(document.getElementById("solarChargerStartOffsetMin").textContent) || 0,
           solarChargerStopOffsetMin: parseInt(document.getElementById("solarChargerStopOffsetMin").textContent) || 0
         };
@@ -593,6 +625,13 @@
       }
       function hideSaveButton() {
         document.getElementById("saveTime").hidden = true;
+      }
+
+      function updateSolarModeUI() {
+        const solarModeAuto = document.getElementById("solarModeSwitch").checked;
+        const chargerSwitch = document.getElementById("solarChargerSwitch");
+        document.getElementById("solarModeText").textContent = solarModeAuto ? "Auto" : "Manual";
+        chargerSwitch.disabled = solarModeAuto;
       }
 
       async function refreshSolarOffsets() {
@@ -635,7 +674,10 @@
           nightMinute: parseInt(document.getElementById("nightMinute").value) || 0,
           rainSensorEnabled: document.getElementById("rainSensorSwitch").checked ? 1 : 0,
           output12VEnabled: document.getElementById("output12VSwitch").checked ? 1 : 0,
-          solarChargerEnabled: document.getElementById("solarChargerSwitch").checked ? 1 : 0,
+          solarChargerAuto: document.getElementById("solarModeSwitch").checked ? 1 : 0,
+          solarChargerEnabled: document.getElementById("solarModeSwitch").checked
+            ? (originalConfig.solarChargerEnabled ? 1 : 0)
+            : (document.getElementById("solarChargerSwitch").checked ? 1 : 0),
           solarChargerStartOffsetMin: parseInt(document.getElementById("solarChargerStartOffsetMin").textContent) || 0,
           solarChargerStopOffsetMin: parseInt(document.getElementById("solarChargerStopOffsetMin").textContent) || 0
         };
@@ -658,6 +700,7 @@
             rainSensorEnabled: !!newConfig.rainSensorEnabled,
             output12VEnabled: !!newConfig.output12VEnabled,
             solarChargerEnabled: !!newConfig.solarChargerEnabled,
+            solarChargerAuto: !!newConfig.solarChargerAuto,
             solarChargerStartOffsetMin: newConfig.solarChargerStartOffsetMin,
             solarChargerStopOffsetMin: newConfig.solarChargerStopOffsetMin
           };
@@ -680,6 +723,10 @@
         document.getElementById("rainSensorSwitch").addEventListener("change", checkForChanges);
         document.getElementById("output12VSwitch").addEventListener("change", checkForChanges);
         document.getElementById("solarChargerSwitch").addEventListener("change", checkForChanges);
+        document.getElementById("solarModeSwitch").addEventListener("change", () => {
+          updateSolarModeUI();
+          checkForChanges();
+        });
 
         document.getElementById("saveTime").addEventListener("click", saveConfig);
         document.getElementById("scanWifi").addEventListener("click", scanWifiNetworks);

@@ -9,6 +9,7 @@
 #include <FastAccelStepper.h>
 #include <TMCStepper.h>
 #include <EEPROM.h>
+#include <Preferences.h>
 #include <WiFiClient.h>
 #include <Wire.h>
 #include <INA226_WE.h>
@@ -136,6 +137,7 @@ struct WiFiCredentials {
   char password[passwordMaxSize];
 };
 WiFiCredentials credentials;
+Preferences preferences;
 
 // =======================
 // Timing & Scheduling
@@ -174,6 +176,7 @@ char sunsetStr[6] = "--:--";
 char chargerStartStr[6] = "--:--";
 char chargerStopStr[6] = "--:--";
 bool sunTimesCalculatedToday = false;
+int lastSunCalcYearDay = -1;
 int solarChargerStartOffsetMin = 30;
 int solarChargerStopOffsetMin = 30;
 
@@ -193,6 +196,7 @@ bool homeFlag = false;
 bool apModeEnabled = true;
 bool rainSensorEnabled = true;
 bool solarChargerEnabled = true;
+bool solarChargerAuto = true;
 bool output12VEnabled = true;
 bool bootUpSunCheck = false;
 // bool highCPU          = false;
@@ -271,10 +275,22 @@ const float ocv_pack_soc[OCV_N] = {
 // --- Global variables ---
 float batterySoC = 100.0;       // 0–100%
 float currentCapacity_mAh = 0.0;       // coulomb counter
-const float capacity_mAh = 3300.0; // battery nominal
+const float nominalCapacity_mAh = 3300.0f;
+float estimatedCapacity_mAh = nominalCapacity_mAh;
 float chargedToday = 0.0f;
 float dischargedToday = 0.0f;
 float pvToday = 0.0f;
+float lastPersistedSoC = -1000.0f;
+unsigned long lastSoCPersistMillis = 0;
+float lastPersistedChargedToday = 0.0f;
+float lastPersistedDischargedToday = 0.0f;
+float lastPersistedPvToday = 0.0f;
+unsigned long lastEnergyPersistMillis = 0;
+bool dailyEnergyStateLoaded = false;
+int dailyEnergyDayStamp = -1;
+bool capacityLearningFromFull = false;
+bool fullChargeLatched = false;
+float dischargedSinceFull_mAh = 0.0f;
 
 bool serialDebug = false;
 
@@ -283,6 +299,21 @@ const float PREEMPTIVE_SOC_CLEAR = 30.0f;
 const float PREEMPTIVE_VOLT = 11.3f;
 const float PREEMPTIVE_VOLT_CLEAR = 11.6f;
 const float PV_CHARGING_MIN_MA = 20.0f;
+const unsigned long SOC_PERSIST_INTERVAL_MS = 10UL * 60UL * 1000UL;
+const float SOC_PERSIST_DELTA_PCT = 2.0f;
+const float SOC_BOOT_ACCEPT_DELTA_PCT = 5.0f;
+const unsigned long BOOT_BATT_SETTLE_MS = 1500;
+const uint8_t BOOT_BATT_SAMPLES = 8;
+const unsigned long BOOT_BATT_SAMPLE_DELAY_MS = 80;
+const float BOOT_BATT_MAX_DELTA_V = 0.05f;
+const float BOOT_BATT_MAX_CURRENT_MA = 80.0f;
+const unsigned long ENERGY_PERSIST_INTERVAL_MS = 15UL * 60UL * 1000UL;
+const float ENERGY_PERSIST_DELTA_MAH = 25.0f;
+const float FULL_CHARGE_BMS_VOLTAGE = 16.5f;
+const float FULL_CHARGE_CURRENT_MA = 100.0f;
+const float FULL_CHARGE_RELEASE_VOLTAGE = 15.0f;
+const float CAPACITY_LEARN_MIN_FRACTION = 0.60f;
+const float CAPACITY_LEARN_ALPHA = 0.20f;
 
 #define DEBUG_PRINT(x) \
   do { \
@@ -336,12 +367,399 @@ void checkPreemptiveFold();
 void inaSetup();
 void inaTrigger();
 void inaRead();
+float voltageToSoC(float vpack);
+bool getStableBootBatteryReading(float &stableVoltage, float &stableCurrent);
+void initSocFromBootOrNvm();
+void loadPersistedSocState(bool &hasStoredState, float &storedSoc, float &storedCapacity);
+void savePersistedSocState(bool force = false);
+void updateCapacityLearning(float current_mA, float delta_mAh);
+void handleRealFullChargeEvent();
+int getCurrentDayStamp(const struct tm &timeInfo);
+void ensureDailyEnergyStateLoaded(const struct tm &timeInfo);
+void resetDailyEnergyCounters(bool persist = true);
+void savePersistedEnergyState(bool force = false);
 
 // HTTP handlers you referenced (kept minimal but functional)
 void handleMove(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
 void handleSave(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
 void handleSetEnd(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
 void handleSaveWifi(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
+void handleSetupDrivers(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
+void handleSetupInas(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
+void loadPersistedConfig();
+void savePersistedConfig();
+void loadWiFiCredentials();
+void saveWiFiCredentials();
+bool hasStoredWifiCredentials();
+bool migrateLegacyWifiCredentials();
+
+void loadPersistedConfig() {
+  preferences.begin("cfg", true);
+  morningHour = preferences.getInt("mHr", morningHour);
+  morningMinute = preferences.getInt("mMin", morningMinute);
+  nightHour = preferences.getInt("nHr", nightHour);
+  nightMinute = preferences.getInt("nMin", nightMinute);
+  scheduledAwnings = preferences.getBool("sched", scheduledAwnings);
+  rainSensorEnabled = preferences.getBool("rain", rainSensorEnabled);
+  solarChargerEnabled = preferences.getBool("solar", solarChargerEnabled);
+  solarChargerAuto = preferences.getBool("solAuto", solarChargerAuto);
+  output12VEnabled = preferences.getBool("out12v", output12VEnabled);
+  solarChargerStartOffsetMin = preferences.getInt("solSta", solarChargerStartOffsetMin);
+  solarChargerStopOffsetMin = preferences.getInt("solStp", solarChargerStopOffsetMin);
+  STALL_VALUE = preferences.getUChar("stall", STALL_VALUE);
+  LOW_STALL_VALUE = preferences.getUChar("lstall", LOW_STALL_VALUE);
+  STALL_MIN_SPEED = preferences.getUInt("stMin", STALL_MIN_SPEED);
+  speed = preferences.getUInt("speed", speed);
+  acceleration = preferences.getUInt("accel", acceleration);
+  R_SHUNT_BAT = preferences.getFloat("rBat", R_SHUNT_BAT);
+  R_SHUNT_PV = preferences.getFloat("rPv", R_SHUNT_PV);
+  preferences.end();
+
+  morningHour = constrain(morningHour, 0, 23);
+  morningMinute = constrain(morningMinute, 0, 59);
+  nightHour = constrain(nightHour, 0, 23);
+  nightMinute = constrain(nightMinute, 0, 59);
+  solarChargerStartOffsetMin = constrain(solarChargerStartOffsetMin, 0, 360);
+  solarChargerStopOffsetMin = constrain(solarChargerStopOffsetMin, 0, 360);
+  if (STALL_MIN_SPEED < 1) STALL_MIN_SPEED = 1;
+  if (speed < 1) speed = 1;
+  if (acceleration < 1) acceleration = 1;
+  if (R_SHUNT_BAT <= 0.0f || R_SHUNT_BAT > 1.0f) R_SHUNT_BAT = 0.02455f;
+  if (R_SHUNT_PV <= 0.0f || R_SHUNT_PV > 1.0f) R_SHUNT_PV = 0.02436f;
+}
+
+void savePersistedConfig() {
+  preferences.begin("cfg", false);
+  preferences.putInt("mHr", morningHour);
+  preferences.putInt("mMin", morningMinute);
+  preferences.putInt("nHr", nightHour);
+  preferences.putInt("nMin", nightMinute);
+  preferences.putBool("sched", scheduledAwnings);
+  preferences.putBool("rain", rainSensorEnabled);
+  preferences.putBool("solar", solarChargerEnabled);
+  preferences.putBool("solAuto", solarChargerAuto);
+  preferences.putBool("out12v", output12VEnabled);
+  preferences.putInt("solSta", solarChargerStartOffsetMin);
+  preferences.putInt("solStp", solarChargerStopOffsetMin);
+  preferences.putUChar("stall", STALL_VALUE);
+  preferences.putUChar("lstall", LOW_STALL_VALUE);
+  preferences.putUInt("stMin", STALL_MIN_SPEED);
+  preferences.putUInt("speed", speed);
+  preferences.putUInt("accel", acceleration);
+  preferences.putFloat("rBat", R_SHUNT_BAT);
+  preferences.putFloat("rPv", R_SHUNT_PV);
+  preferences.end();
+}
+
+bool hasStoredWifiCredentials() {
+  preferences.begin("wifi", true);
+  bool hasSsid = preferences.isKey("ssid");
+  preferences.end();
+  return hasSsid;
+}
+
+bool migrateLegacyWifiCredentials() {
+  EEPROM.begin(sizeof(WiFiCredentials));
+  WiFiCredentials legacyCredentials;
+  EEPROM.get(0, legacyCredentials);
+
+  bool validLegacyCredentials =
+    legacyCredentials.ssid[0] != 0 &&
+    legacyCredentials.ssid[0] != static_cast<char>(0xFF);
+
+  if (validLegacyCredentials) {
+    memcpy(&credentials, &legacyCredentials, sizeof(WiFiCredentials));
+    credentials.ssid[ssidMaxSize - 1] = 0;
+    credentials.password[passwordMaxSize - 1] = 0;
+    saveWiFiCredentials();
+  }
+
+  EEPROM.end();
+  return validLegacyCredentials;
+}
+
+void loadWiFiCredentials() {
+  memset(&credentials, 0, sizeof(credentials));
+
+  if (hasStoredWifiCredentials()) {
+    preferences.begin("wifi", true);
+    String storedSsid = preferences.getString("ssid", "");
+    String storedPassword = preferences.getString("pass", "");
+    preferences.end();
+
+    storedSsid.toCharArray(credentials.ssid, ssidMaxSize);
+    storedPassword.toCharArray(credentials.password, passwordMaxSize);
+  } else if (!migrateLegacyWifiCredentials()) {
+    strncpy(credentials.ssid, ssid, sizeof(credentials.ssid));
+    credentials.ssid[ssidMaxSize - 1] = 0;
+    strncpy(credentials.password, password, sizeof(credentials.password));
+    credentials.password[passwordMaxSize - 1] = 0;
+    saveWiFiCredentials();
+    Serial.println("Using hardcoded credentials.");
+  }
+}
+
+void saveWiFiCredentials() {
+  preferences.begin("wifi", false);
+  preferences.putString("ssid", credentials.ssid);
+  preferences.putString("pass", credentials.password);
+  preferences.end();
+}
+
+void loadPersistedSocState(bool &hasStoredState, float &storedSoc, float &storedCapacity) {
+  preferences.begin("soc", true);
+  hasStoredState = preferences.getBool("valid", false);
+  storedSoc = preferences.getFloat("soc", 0.0f);
+  storedCapacity = preferences.getFloat("cap", 0.0f);
+  estimatedCapacity_mAh = preferences.getFloat("estCap", nominalCapacity_mAh);
+  preferences.end();
+
+  if (estimatedCapacity_mAh < 1000.0f || estimatedCapacity_mAh > (nominalCapacity_mAh * 2.0f)) {
+    estimatedCapacity_mAh = nominalCapacity_mAh;
+  }
+
+  if (!hasStoredState) {
+    return;
+  }
+
+  if (storedSoc < 0.0f || storedSoc > 100.0f || storedCapacity < 0.0f || storedCapacity > estimatedCapacity_mAh) {
+    hasStoredState = false;
+  }
+}
+
+bool getStableBootBatteryReading(float &stableVoltage, float &stableCurrent) {
+  stableVoltage = 0.0f;
+  stableCurrent = 0.0f;
+
+  disconnectCharger();
+  digitalWrite(OUTPUT_12V_EN, HIGH);
+  delay(BOOT_BATT_SETTLE_MS);
+
+  float voltageSum = 0.0f;
+  float currentSum = 0.0f;
+  float minVoltage = 1000.0f;
+  float maxVoltage = -1000.0f;
+
+  for (uint8_t sample = 0; sample < BOOT_BATT_SAMPLES; sample++) {
+    inaBat.startSingleMeasurement();
+    delay(12);
+
+    float sampleVoltage = inaBat.getBusVoltage_V();
+    float sampleCurrent = -inaBat.getCurrent_mA();
+
+    if (!isfinite(sampleVoltage) || !isfinite(sampleCurrent) || sampleVoltage <= 0.0f || sampleVoltage > 20.0f) {
+      return false;
+    }
+
+    if (fabs(sampleCurrent) > BOOT_BATT_MAX_CURRENT_MA) {
+      return false;
+    }
+
+    voltageSum += sampleVoltage;
+    currentSum += sampleCurrent;
+    if (sampleVoltage < minVoltage) minVoltage = sampleVoltage;
+    if (sampleVoltage > maxVoltage) maxVoltage = sampleVoltage;
+
+    delay(BOOT_BATT_SAMPLE_DELAY_MS);
+  }
+
+  if ((maxVoltage - minVoltage) > BOOT_BATT_MAX_DELTA_V) {
+    return false;
+  }
+
+  stableVoltage = voltageSum / BOOT_BATT_SAMPLES;
+  stableCurrent = currentSum / BOOT_BATT_SAMPLES;
+  return true;
+}
+
+void initSocFromBootOrNvm() {
+  float stableVoltage = 0.0f;
+  float stableCurrent = 0.0f;
+
+  if (!getStableBootBatteryReading(stableVoltage, stableCurrent)) {
+    return;
+  }
+
+  batteryVoltage = stableVoltage;
+  batteryCurrent = stableCurrent;
+  pvCurrent = 0.0f;
+  lowVoltage = (batteryVoltage < lowVoltageValue);
+
+  float socVoltage = voltageToSoC(stableVoltage);
+  if (socVoltage <= 0.0f) {
+    return;
+  }
+
+  bool hasStoredState = false;
+  float storedSoc = 0.0f;
+  float storedCapacity = 0.0f;
+  loadPersistedSocState(hasStoredState, storedSoc, storedCapacity);
+
+  if (hasStoredState && fabs(storedSoc - socVoltage) <= SOC_BOOT_ACCEPT_DELTA_PCT) {
+    batterySoC = storedSoc;
+    currentCapacity_mAh = storedCapacity;
+  } else {
+    batterySoC = socVoltage;
+    currentCapacity_mAh = estimatedCapacity_mAh * (socVoltage / 100.0f);
+  }
+
+  socInitialized = true;
+  lastPersistedSoC = batterySoC;
+  if (!hasStoredState) {
+    savePersistedSocState(true);
+  }
+}
+
+void savePersistedSocState(bool force) {
+  if (!socInitialized) {
+    return;
+  }
+
+  if (!force) {
+    if ((currentMillis - lastSoCPersistMillis) < SOC_PERSIST_INTERVAL_MS) {
+      return;
+    }
+    if (fabs(batterySoC - lastPersistedSoC) < SOC_PERSIST_DELTA_PCT) {
+      return;
+    }
+  }
+
+  preferences.begin("soc", false);
+  preferences.putBool("valid", true);
+  preferences.putFloat("soc", batterySoC);
+  preferences.putFloat("cap", currentCapacity_mAh);
+  preferences.putFloat("estCap", estimatedCapacity_mAh);
+  preferences.end();
+
+  lastPersistedSoC = batterySoC;
+  lastSoCPersistMillis = currentMillis;
+}
+
+void handleRealFullChargeEvent() {
+  if (capacityLearningFromFull &&
+      dischargedSinceFull_mAh >= (estimatedCapacity_mAh * CAPACITY_LEARN_MIN_FRACTION)) {
+    estimatedCapacity_mAh =
+      ((1.0f - CAPACITY_LEARN_ALPHA) * estimatedCapacity_mAh) +
+      (CAPACITY_LEARN_ALPHA * dischargedSinceFull_mAh);
+  }
+
+  currentCapacity_mAh = estimatedCapacity_mAh;
+  batterySoC = 100.0f;
+  socInitialized = true;
+  capacityLearningFromFull = true;
+  dischargedSinceFull_mAh = 0.0f;
+  savePersistedSocState(true);
+}
+
+void updateCapacityLearning(float current_mA, float delta_mAh) {
+  bool bmsFullDetected =
+    isChargerConnected() &&
+    batteryVoltage >= FULL_CHARGE_BMS_VOLTAGE &&
+    fabs(current_mA) <= FULL_CHARGE_CURRENT_MA;
+
+  if (bmsFullDetected && !fullChargeLatched) {
+    handleRealFullChargeEvent();
+    fullChargeLatched = true;
+  } else if (!bmsFullDetected && batteryVoltage < FULL_CHARGE_RELEASE_VOLTAGE) {
+    fullChargeLatched = false;
+  }
+
+  if (capacityLearningFromFull && delta_mAh < 0.0f) {
+    dischargedSinceFull_mAh += -delta_mAh;
+  }
+
+  if (capacityLearningFromFull && lowVoltage &&
+      dischargedSinceFull_mAh >= (estimatedCapacity_mAh * CAPACITY_LEARN_MIN_FRACTION)) {
+    estimatedCapacity_mAh =
+      ((1.0f - CAPACITY_LEARN_ALPHA) * estimatedCapacity_mAh) +
+      (CAPACITY_LEARN_ALPHA * dischargedSinceFull_mAh);
+    capacityLearningFromFull = false;
+    dischargedSinceFull_mAh = 0.0f;
+    savePersistedSocState(true);
+  }
+}
+
+int getCurrentDayStamp(const struct tm &timeInfo) {
+  return ((timeInfo.tm_year + 1900) * 1000) + timeInfo.tm_yday;
+}
+
+void resetDailyEnergyCounters(bool persist) {
+  chargedToday = 0.0f;
+  dischargedToday = 0.0f;
+  pvToday = 0.0f;
+  lastPersistedChargedToday = 0.0f;
+  lastPersistedDischargedToday = 0.0f;
+  lastPersistedPvToday = 0.0f;
+
+  if (persist && dailyEnergyStateLoaded && dailyEnergyDayStamp >= 0) {
+    savePersistedEnergyState(true);
+  }
+}
+
+void ensureDailyEnergyStateLoaded(const struct tm &timeInfo) {
+  int currentDayStamp = getCurrentDayStamp(timeInfo);
+
+  if (dailyEnergyStateLoaded && dailyEnergyDayStamp == currentDayStamp) {
+    return;
+  }
+
+  preferences.begin("energy", true);
+  bool valid = preferences.getBool("valid", false);
+  int storedDayStamp = preferences.getInt("day", -1);
+  float storedCharged = preferences.getFloat("chg", 0.0f);
+  float storedDischarged = preferences.getFloat("dchg", 0.0f);
+  float storedPv = preferences.getFloat("pv", 0.0f);
+  preferences.end();
+
+  dailyEnergyDayStamp = currentDayStamp;
+  dailyEnergyStateLoaded = true;
+
+  if (valid && storedDayStamp == currentDayStamp &&
+      storedCharged >= 0.0f && storedDischarged >= 0.0f && storedPv >= 0.0f) {
+    chargedToday = storedCharged;
+    dischargedToday = storedDischarged;
+    pvToday = storedPv;
+    lastPersistedChargedToday = storedCharged;
+    lastPersistedDischargedToday = storedDischarged;
+    lastPersistedPvToday = storedPv;
+    return;
+  }
+
+  resetDailyEnergyCounters(false);
+  savePersistedEnergyState(true);
+}
+
+void savePersistedEnergyState(bool force) {
+  if (!dailyEnergyStateLoaded || dailyEnergyDayStamp < 0) {
+    return;
+  }
+
+  if (!force) {
+    if ((currentMillis - lastEnergyPersistMillis) < ENERGY_PERSIST_INTERVAL_MS) {
+      return;
+    }
+
+    bool chargedChanged = fabs(chargedToday - lastPersistedChargedToday) >= ENERGY_PERSIST_DELTA_MAH;
+    bool dischargedChanged = fabs(dischargedToday - lastPersistedDischargedToday) >= ENERGY_PERSIST_DELTA_MAH;
+    bool pvChanged = fabs(pvToday - lastPersistedPvToday) >= ENERGY_PERSIST_DELTA_MAH;
+    if (!chargedChanged && !dischargedChanged && !pvChanged) {
+      return;
+    }
+  }
+
+  preferences.begin("energy", false);
+  preferences.putBool("valid", true);
+  preferences.putInt("day", dailyEnergyDayStamp);
+  preferences.putFloat("chg", chargedToday);
+  preferences.putFloat("dchg", dischargedToday);
+  preferences.putFloat("pv", pvToday);
+  preferences.end();
+
+  lastPersistedChargedToday = chargedToday;
+  lastPersistedDischargedToday = dischargedToday;
+  lastPersistedPvToday = pvToday;
+  lastEnergyPersistMillis = currentMillis;
+}
 
 void setupDrivers() {
   driver[0].begin();
@@ -408,6 +826,8 @@ void setup() {
   }
 
   esp_log_level_set("i2c.master", ESP_LOG_NONE);
+  loadPersistedConfig();
+  loadWiFiCredentials();
 
   // Pins
   pinMode(OUTPUT_12V_EN, OUTPUT);
@@ -415,17 +835,19 @@ void setup() {
 
 
   pinMode(BAT_EN, OUTPUT);
+  digitalWrite(BAT_EN, HIGH);
 
   pinMode(PV_EN, OUTPUT);
+  digitalWrite(PV_EN, HIGH);
 
   pinMode(RAIN_PIN, INPUT);
-
-  enableOutput12V();
 
 
   // I2C
   Wire.begin(I2C_SDA, I2C_SCL);
   inaSetup();
+  initSocFromBootOrNvm();
+  enableOutput12V();
 
   // UART for TMC2209
   SerialTMC.begin(115200, SERIAL_8N1, UART_RX, UART_TX);
@@ -436,19 +858,6 @@ void setup() {
 
   // Reset reason
   printResetReason();
-
-  // EEPROM credentials
-  EEPROM.begin(sizeof(WiFiCredentials));
-  EEPROM.get(0, credentials);
-
-  if (strlen(credentials.ssid) == 0 || credentials.ssid[0] == 0xFF) {
-    Serial.println("Using hardcoded credentials.");
-    strncpy(credentials.ssid, ssid, sizeof(credentials.ssid));
-    strncpy(credentials.password, password, sizeof(credentials.password));
-  }
-
-  EEPROM.put(0, credentials);
-  EEPROM.commit();
 
   delay(100);
 
@@ -465,6 +874,10 @@ void setup() {
     initCharger();
     home();
     checkRain();
+  }
+
+  if (!output12VEnabled && !moveFlag[0] && !moveFlag[1]) {
+    disableOutput12V(false);
   }
 
   if (!LittleFS.begin()) {
@@ -559,15 +972,17 @@ void configureServer() {
     float awning1Percent = 100.0f * ((float)stepper[1]->getCurrentPosition()) / ((float)windowHeight[1]);
     int dist0 = stepper[0]->targetPos() - stepper[0]->getCurrentPosition();
     int dist1 = stepper[1]->targetPos() - stepper[1]->getCurrentPosition();
-    StaticJsonDocument<512> doc;
+    StaticJsonDocument<640> doc;
     doc["batteryVoltage"]      = batteryVoltage;
     doc["batteryCurrent"]      = batteryCurrent;
     doc["currentCapacity_mAh"] = currentCapacity_mAh;
+    doc["estimatedCapacity_mAh"] = estimatedCapacity_mAh;
     doc["batterySoC"]          = batterySoC;
     doc["chargedToday"]        = chargedToday;
     doc["dischargedToday"]     = dischargedToday;
     doc["pvToday"]             = pvToday;
     doc["pvCurrent"]           = pvCurrent;
+    doc["chargerConnected"]    = isChargerConnected();
     doc["pos0"]                = stepper[0]->getCurrentPosition();
     doc["pos1"]                = stepper[1]->getCurrentPosition();
     doc["dist0"]               = dist0;
@@ -577,7 +992,7 @@ void configureServer() {
     doc["homeFlag"]            = homeFlag;
     doc["raining"]             = !rainState;
 
-    char json[512];
+    char json[640];
     serializeJson(doc, json, sizeof(json));
     request->send(200, "application/json", json);
   });
@@ -599,7 +1014,9 @@ void configureServer() {
   doc["nightMinute"]         = nightMinute;
   doc["rainSensorEnabled"]   = rainSensorEnabled;
   doc["output12VEnabled"]    = !digitalRead(OUTPUT_12V_EN);
-  doc["solarChargerEnabled"] = isChargerConnected();
+  doc["solarChargerEnabled"] = solarChargerEnabled;
+  doc["solarChargerAuto"]    = solarChargerAuto;
+  doc["chargerConnected"]    = isChargerConnected();
   doc["solarChargerStartOffsetMin"] = solarChargerStartOffsetMin;
   doc["solarChargerStopOffsetMin"]  = solarChargerStopOffsetMin;
 
@@ -829,7 +1246,11 @@ void IRAM_ATTR stallDetected1() {
 void initCharger() {
   disconnectCharger();
   delay(1000);
-  if (solarChargerEnabled && isWithinSolarChargingWindow(time(nullptr))) {
+  if (solarChargerAuto) {
+    if (isWithinSolarChargingWindow(time(nullptr))) {
+      connectCharger();
+    }
+  } else if (solarChargerEnabled) {
     connectCharger();
   }
   chargerInitialized = true;
@@ -1053,6 +1474,7 @@ void checkMotors() {
           if (homed[0] && homed[1]) {
               homeFlag = false;
               initialHome = true;
+              disableOutput12V(false);
           }
           break;
       }
@@ -1154,6 +1576,7 @@ void inaRead() {
   
   // update SoC
   updateSoC(batteryVoltage, batteryCurrent, dt_s);
+  savePersistedEnergyState();
   inaReadMillis = currentMillis;
   inaMeasuring = false;
 }
@@ -1180,7 +1603,7 @@ void updateSoC(float vpack, float current_mA, float dt_s) {
     if (soc_voltage == 0.0) {
       return;
     }
-    currentCapacity_mAh = capacity_mAh * (soc_voltage / 100.0);
+    currentCapacity_mAh = estimatedCapacity_mAh * (soc_voltage / 100.0f);
     socInitialized = true;
   }
 
@@ -1193,17 +1616,19 @@ void updateSoC(float vpack, float current_mA, float dt_s) {
     dischargedToday -= delta_mAh;
   }
 
+  updateCapacityLearning(current_mA, delta_mAh);
+
   currentCapacity_mAh += delta_mAh;
 
   if (abs(current_mA) < 1.0 and batteryVoltage > 13) {
-    currentCapacity_mAh = capacity_mAh;
+    currentCapacity_mAh = estimatedCapacity_mAh;
   }
 
   // Clamp
   if (currentCapacity_mAh < 0.0) currentCapacity_mAh = 0.0;
-  if (currentCapacity_mAh > capacity_mAh) currentCapacity_mAh = capacity_mAh;
+  if (currentCapacity_mAh > estimatedCapacity_mAh) currentCapacity_mAh = estimatedCapacity_mAh;
 
-  float soc_coulomb = 100.0 * (currentCapacity_mAh / capacity_mAh);
+  float soc_coulomb = 100.0f * (currentCapacity_mAh / estimatedCapacity_mAh);
 
   // --- 2) Voltage-based SoC with IR compensation ---
   const float R_internal = 0.18; // ohms, pack internal resistance (tune this)
@@ -1219,6 +1644,8 @@ void updateSoC(float vpack, float current_mA, float dt_s) {
   // Clamp
   if (batterySoC < 0.0) batterySoC = 0.0;
   if (batterySoC > 100.0) batterySoC = 100.0;
+
+  savePersistedSocState();
 }
 
 
@@ -1311,31 +1738,40 @@ bool checkInternet() {
 
 void checkTime() {
   time_t now = time(nullptr);
-  struct tm *timeinfo = localtime(&now);
-  currentHour = timeinfo->tm_hour;
-  currentMinute = timeinfo->tm_min;
-  currentSecond = timeinfo->tm_sec;
+  struct tm timeInfo;
+  localtime_r(&now, &timeInfo);
+  currentHour = timeInfo.tm_hour;
+  currentMinute = timeInfo.tm_min;
+  currentSecond = timeInfo.tm_sec;
+
+  ensureDailyEnergyStateLoaded(timeInfo);
 
   DEBUG_PRINTF("Current time: %02d:%02d:%02d\n", currentHour, currentMinute, currentSecond);
 
-  // ----- Calculate sunrise/sunset once per day -----
-  if (!bootUpSunCheck || (!sunTimesCalculatedToday && currentHour == 0 && currentMinute == 0)) {
+  // ----- Calculate sunrise/sunset on first valid time sync or day change -----
+  if (!bootUpSunCheck || lastSunCalcYearDay != timeInfo.tm_yday) {
     calculateSunTimes();
-    chargedToday = 0.0f;
-    dischargedToday = 0.0f;
-    pvToday = 0.0f;
     bootUpSunCheck = true;
-  }
-  if (currentHour == 0 && currentMinute == 1) {
-    sunTimesCalculatedToday = false;
+    if (lastSunCalcYearDay != timeInfo.tm_yday) {
+      resetDailyEnergyCounters();
+    }
   }
 
   // ----- Solar charger control -----
-  if (solarChargerEnabled && !isChargerConnected() && isWithinSolarChargingWindow(now)) {
-    connectCharger();
-  }
-  if (isChargerConnected() && (!solarChargerEnabled || !isWithinSolarChargingWindow(now))) {
-    disconnectCharger();
+  if (solarChargerAuto) {
+    if (!isChargerConnected() && isWithinSolarChargingWindow(now)) {
+      connectCharger();
+    }
+    if (isChargerConnected() && !isWithinSolarChargingWindow(now)) {
+      disconnectCharger();
+    }
+  } else {
+    if (solarChargerEnabled && !isChargerConnected()) {
+      connectCharger();
+    }
+    if (!solarChargerEnabled && isChargerConnected()) {
+      disconnectCharger();
+    }
   }
 
   if (scheduledAwnings) {
@@ -1430,6 +1866,8 @@ void calculateSunTimes() {
   formatTimeToHHMM(sunsetTime, sunsetStr, sizeof(sunsetStr));
   formatTimeToHHMM(getChargerStartTime(), chargerStartStr, sizeof(chargerStartStr));
   formatTimeToHHMM(getChargerStopTime(), chargerStopStr, sizeof(chargerStopStr));
+  sunTimesCalculatedToday = true;
+  lastSunCalcYearDay = localTime.tm_yday;
   DEBUG_PRINT("Sunrise: "); DEBUG_PRINTLN(sunriseStr);
   DEBUG_PRINT("Sunset : "); DEBUG_PRINTLN(sunsetStr);
 }
@@ -1500,17 +1938,21 @@ void handleSave(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_
   DynamicJsonDocument json(1024);
   if (deserializeJson(json, data, len)) return;
   // Example optional fields:
-  if (json.containsKey("morningHour")) morningHour = json["morningHour"];
-  if (json.containsKey("morningMinute")) morningMinute = json["morningMinute"];
-  if (json.containsKey("nightHour")) nightHour = json["nightHour"];
-  if (json.containsKey("nightMinute")) nightMinute = json["nightMinute"];
+  if (json.containsKey("morningHour")) morningHour = constrain((int)json["morningHour"], 0, 23);
+  if (json.containsKey("morningMinute")) morningMinute = constrain((int)json["morningMinute"], 0, 59);
+  if (json.containsKey("nightHour")) nightHour = constrain((int)json["nightHour"], 0, 23);
+  if (json.containsKey("nightMinute")) nightMinute = constrain((int)json["nightMinute"], 0, 59);
   if (json.containsKey("scheduled")) scheduledAwnings = json["scheduled"];
+  if (json.containsKey("automaticDayNight")) scheduledAwnings = json["automaticDayNight"];
   if (json.containsKey("rainSensorEnabled")) rainSensorEnabled = json["rainSensorEnabled"];
   if (json.containsKey("solarChargerStartOffsetMin")) {
     solarChargerStartOffsetMin = constrain((int)json["solarChargerStartOffsetMin"], 0, 360);
   }
   if (json.containsKey("solarChargerStopOffsetMin")) {
     solarChargerStopOffsetMin = constrain((int)json["solarChargerStopOffsetMin"], 0, 360);
+  }
+  if (json.containsKey("solarChargerAuto")) {
+    solarChargerAuto = json["solarChargerAuto"];
   }
   if (json.containsKey("output12VEnabled")) {
     bool currentOutput12V = !digitalRead(OUTPUT_12V_EN);
@@ -1533,13 +1975,22 @@ void handleSave(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_
   formatTimeToHHMM(getChargerStartTime(), chargerStartStr, sizeof(chargerStartStr));
   formatTimeToHHMM(getChargerStopTime(), chargerStopStr, sizeof(chargerStopStr));
   time_t now = time(nullptr);
-  if (solarChargerEnabled && isWithinSolarChargingWindow(now)) {
-    if (!isChargerConnected()) {
+  if (solarChargerAuto) {
+    if (!isChargerConnected() && isWithinSolarChargingWindow(now)) {
       connectCharger();
     }
-  } else if (isChargerConnected()) {
-    disconnectCharger();
+    if (isChargerConnected() && !isWithinSolarChargingWindow(now)) {
+      disconnectCharger();
+    }
+  } else {
+    if (solarChargerEnabled && !isChargerConnected()) {
+      connectCharger();
+    }
+    if (!solarChargerEnabled && isChargerConnected()) {
+      disconnectCharger();
+    }
   }
+  savePersistedConfig();
   request->send(200, "text/plain", "Changes Applied");
 }
 
@@ -1568,8 +2019,7 @@ void handleSaveWifi(AsyncWebServerRequest *request, uint8_t *data, size_t len, s
   credentials.ssid[ssidMaxSize - 1] = 0;
   strncpy(credentials.password, pw, passwordMaxSize);
   credentials.password[passwordMaxSize - 1] = 0;
-  EEPROM.put(0, credentials);
-  EEPROM.commit();
+  saveWiFiCredentials();
   request->send(200, "text/plain", "WiFi Saved");
   connectToWiFi();
   
@@ -1610,10 +2060,11 @@ void handleSetupDrivers(AsyncWebServerRequest *request, uint8_t *data, size_t le
   if (acc >= 1 && acc <= 300000) {
     acceleration = acc;
     stepper[0]->setAcceleration(acceleration);
-    stepper[1]->setSpeedInHz(acceleration);
+    stepper[1]->setAcceleration(acceleration);
   }
 
   setupDrivers();
+  savePersistedConfig();
 
   char response[100];
   snprintf(response, sizeof(response),
@@ -1644,6 +2095,8 @@ void handleSetupInas(AsyncWebServerRequest *request, uint8_t *data, size_t len, 
   if (shunt_bat > 0 || shunt_pv > 0) {
     inaSetup();
   }
+
+  savePersistedConfig();
 
   char response[100];
   snprintf(response, sizeof(response),
@@ -1712,9 +2165,11 @@ void loop() {
       }
       if (!checkInternet()) {
         connectToWiFi();
-        timeSynced = false;
       }
-      if (timeSynced) {
+      if (!timeSynced && isNTPReady()) {
+        timeSynced = true;
+      }
+      if (timeSynced || isNTPReady()) {
         checkTime();
       }
     }
