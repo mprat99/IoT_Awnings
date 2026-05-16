@@ -189,6 +189,38 @@
       </div>
     </div>
 
+    <div class="speed-panel">
+      <div class="speed-panel-header">
+        <div>
+          <div class="speed-panel-title">Awning Speed</div>
+          <div class="speed-panel-subtitle">Set an independent speed for each motor.</div>
+        </div>
+        <div class="speed-panel-unit">steps/s</div>
+      </div>
+      <div class="speed-grid">
+        <div class="speed-card">
+          <div class="speed-card-label">Awning 1</div>
+          <div class="speed-card-value">
+            <input class="speed-input" type="number" id="motorSpeed0" min="1" max="300000" step="100">
+          </div>
+          <div class="speed-card-meta">
+            <span id="speedBadge0">1.00x</span>
+            <span id="speedTravel0">Travel: -- steps</span>
+          </div>
+        </div>
+        <div class="speed-card">
+          <div class="speed-card-label">Awning 2</div>
+          <div class="speed-card-value">
+            <input class="speed-input" type="number" id="motorSpeed1" min="1" max="300000" step="100">
+          </div>
+          <div class="speed-card-meta">
+            <span id="speedBadge1">1.00x</span>
+            <span id="speedTravel1">Travel: -- steps</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
 
     <div style="display: flex; justify-content: center; align-items: center; margin-bottom: 6em;">
       <button class="button-save" id="saveTime">SAVE</button>
@@ -266,6 +298,8 @@
       const distance = [0, 0];
       const direction = ["up", "up"];
       const awningAnimation = [null, null];
+      const motorSpeeds = [7000, 7000];
+      const travelSteps = [1, 1];
       let raining = false;
       let firstLoad = true;
 
@@ -317,9 +351,14 @@
         var xhr = new XMLHttpRequest();
         xhr.open("POST", "/setEndPosition");
         xhr.setRequestHeader("Content-Type", "application/json");
+        const action = buttonId.startsWith("save") ? "save" : "start";
 
         xhr.onreadystatechange = function () {
-          if (xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+          if (xhr.readyState !== XMLHttpRequest.DONE) {
+            return;
+          }
+
+          if (xhr.status === 200) {
             // Toggle visibility based on which button was clicked
             if (buttonId === "end0") {
               document.getElementById("end0").hidden = true;
@@ -334,10 +373,13 @@
               document.getElementById("save1").hidden = true;
               document.getElementById("end1").hidden = false;
             }
+          } else {
+            console.error("setEndPosition failed:", xhr.status, xhr.responseText);
+            alert(xhr.responseText || "Failed to save end position");
           }
         };
 
-        xhr.send(JSON.stringify({ buttonId: buttonId }));
+        xhr.send(JSON.stringify({ buttonId: buttonId, action: action }));
       }
 
 
@@ -422,18 +464,24 @@
       }
 
       // animate fill from current percentage
+      function getAnimationSpeed(index) {
+        const speed = Math.max(1, motorSpeeds[index] || 1);
+        const travel = Math.max(1, travelSteps[index] || 1);
+        return Math.min(0.75, Math.max(0.01, (100 * speed) / travel / 60));
+      }
+
       function startAnimation(id) {
         const index = parseInt(id.slice(-1));
         const fillElement = document.getElementById(id);
         cancelAnimation(index);
-        const speed = [0.05, 0.08]; // % per frame
+        const animationSpeed = getAnimationSpeed(index);
 
         function animate() {
           if (direction[index] === "down") {
-            awningPosition[index] += speed[index];
+            awningPosition[index] += animationSpeed;
             if (awningPosition[index] > 100) awningPosition[index] = 100;
           } else if (direction[index] === "up") {
-            awningPosition[index] -= speed[index];
+            awningPosition[index] -= animationSpeed;
             if (awningPosition[index] < 0) awningPosition[index] = 0;
           }
 
@@ -488,6 +536,8 @@
               document.getElementById("solarChargerSwitch").checked = chargerConnected;
             }
           }
+          if (typeof data.motorSpeed0 === "number") motorSpeeds[0] = data.motorSpeed0;
+          if (typeof data.motorSpeed1 === "number") motorSpeeds[1] = data.motorSpeed1;
 
           distance[0] = data.dist0;
           distance[1] = data.dist1;
@@ -543,6 +593,23 @@
 
       let originalConfig = {};  // store original values from server
 
+      function readMotorSpeedInput(index) {
+        const value = parseInt(document.getElementById(`motorSpeed${index}`).value, 10);
+        return Math.max(1, Number.isFinite(value) ? value : 1);
+      }
+
+      function updateSpeedBadges() {
+        const fastest = Math.max(readMotorSpeedInput(0), readMotorSpeedInput(1), 1);
+
+        [0, 1].forEach(index => {
+          const speed = readMotorSpeedInput(index);
+          const badge = document.getElementById(`speedBadge${index}`);
+          const travel = document.getElementById(`speedTravel${index}`);
+          badge.textContent = `${(speed / fastest).toFixed(2)}x`;
+          travel.textContent = `Travel: ${Math.abs(travelSteps[index] || 0).toLocaleString()} steps`;
+        });
+      }
+
       async function fetchConfig() {
         try {
           const response = await fetch("/config");
@@ -560,9 +627,10 @@
             output12VEnabled: !!config.output12VEnabled,
             solarChargerEnabled: !!config.solarChargerEnabled,
             solarChargerAuto: !!config.solarChargerAuto,
-            chargerConnected: !!config.chargerConnected,
             solarChargerStartOffsetMin: config.solarChargerStartOffsetMin ?? 30,
-            solarChargerStopOffsetMin: config.solarChargerStopOffsetMin ?? 30
+            solarChargerStopOffsetMin: config.solarChargerStopOffsetMin ?? 30,
+            motorSpeed0: config.motorSpeed0 ?? 7000,
+            motorSpeed1: config.motorSpeed1 ?? 7000
           };
 
           // Fill UI
@@ -582,6 +650,13 @@
             : originalConfig.solarChargerEnabled;
           document.getElementById("solarChargerStartOffsetMin").textContent = originalConfig.solarChargerStartOffsetMin;
           document.getElementById("solarChargerStopOffsetMin").textContent = originalConfig.solarChargerStopOffsetMin;
+          motorSpeeds[0] = originalConfig.motorSpeed0;
+          motorSpeeds[1] = originalConfig.motorSpeed1;
+          travelSteps[0] = Math.max(1, config.travelSteps0 ?? 1);
+          travelSteps[1] = Math.max(1, config.travelSteps1 ?? 1);
+          document.getElementById("motorSpeed0").value = originalConfig.motorSpeed0;
+          document.getElementById("motorSpeed1").value = originalConfig.motorSpeed1;
+          updateSpeedBadges();
           document.getElementById("reason0").textContent = config.positionReason0;
           document.getElementById("reason1").textContent = config.positionReason1;
           document.getElementById("moveTime0").textContent = config.moveTime0;
@@ -616,7 +691,9 @@
             ? originalConfig.solarChargerEnabled
             : document.getElementById("solarChargerSwitch").checked,
           solarChargerStartOffsetMin: parseInt(document.getElementById("solarChargerStartOffsetMin").textContent) || 0,
-          solarChargerStopOffsetMin: parseInt(document.getElementById("solarChargerStopOffsetMin").textContent) || 0
+          solarChargerStopOffsetMin: parseInt(document.getElementById("solarChargerStopOffsetMin").textContent) || 0,
+          motorSpeed0: readMotorSpeedInput(0),
+          motorSpeed1: readMotorSpeedInput(1)
         };
 
         // Compare JSON representations
@@ -686,7 +763,9 @@
             ? (originalConfig.solarChargerEnabled ? 1 : 0)
             : (document.getElementById("solarChargerSwitch").checked ? 1 : 0),
           solarChargerStartOffsetMin: parseInt(document.getElementById("solarChargerStartOffsetMin").textContent) || 0,
-          solarChargerStopOffsetMin: parseInt(document.getElementById("solarChargerStopOffsetMin").textContent) || 0
+          solarChargerStopOffsetMin: parseInt(document.getElementById("solarChargerStopOffsetMin").textContent) || 0,
+          motorSpeed0: readMotorSpeedInput(0),
+          motorSpeed1: readMotorSpeedInput(1)
         };
 
         try {
@@ -709,8 +788,13 @@
             solarChargerEnabled: !!newConfig.solarChargerEnabled,
             solarChargerAuto: !!newConfig.solarChargerAuto,
             solarChargerStartOffsetMin: newConfig.solarChargerStartOffsetMin,
-            solarChargerStopOffsetMin: newConfig.solarChargerStopOffsetMin
+            solarChargerStopOffsetMin: newConfig.solarChargerStopOffsetMin,
+            motorSpeed0: newConfig.motorSpeed0,
+            motorSpeed1: newConfig.motorSpeed1
           };
+          motorSpeeds[0] = newConfig.motorSpeed0;
+          motorSpeeds[1] = newConfig.motorSpeed1;
+          updateSpeedBadges();
           await refreshSolarOffsets();
           hideSaveButton();
         } catch (err) {
@@ -730,6 +814,14 @@
         document.getElementById("rainSensorSwitch").addEventListener("change", checkForChanges);
         document.getElementById("output12VSwitch").addEventListener("change", checkForChanges);
         document.getElementById("solarChargerSwitch").addEventListener("change", checkForChanges);
+        document.getElementById("motorSpeed0").addEventListener("input", () => {
+          updateSpeedBadges();
+          checkForChanges();
+        });
+        document.getElementById("motorSpeed1").addEventListener("input", () => {
+          updateSpeedBadges();
+          checkForChanges();
+        });
         document.getElementById("solarModeSwitch").addEventListener("change", () => {
           updateSolarModeUI();
           checkForChanges();

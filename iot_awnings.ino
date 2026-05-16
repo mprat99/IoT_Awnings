@@ -82,7 +82,7 @@ FastAccelStepperEngine engine;
 FastAccelStepper *stepper[2];
 
 // Motion parameters
-uint32_t speed = 7000;         // in steps/s
+uint32_t motorSpeed[] = { 7000, 7000 };  // in steps/s
 uint32_t acceleration = 2000;  // in steps/s²
 
 
@@ -411,11 +411,18 @@ void loadPersistedConfig() {
   STALL_VALUE = preferences.getUChar("stall", STALL_VALUE);
   LOW_STALL_VALUE = preferences.getUChar("lstall", LOW_STALL_VALUE);
   STALL_MIN_SPEED = preferences.getUInt("stMin", STALL_MIN_SPEED);
-  speed = preferences.getUInt("speed", speed);
+  uint32_t legacySpeed = preferences.getUInt("speed", motorSpeed[0]);
+  motorSpeed[0] = preferences.getUInt("speed0", legacySpeed);
+  motorSpeed[1] = preferences.getUInt("speed1", legacySpeed);
   acceleration = preferences.getUInt("accel", acceleration);
   R_SHUNT_BAT = preferences.getFloat("rBat", R_SHUNT_BAT);
   R_SHUNT_PV = preferences.getFloat("rPv", R_SHUNT_PV);
+  downPosition[0] = preferences.getInt("dPos0", downPosition[0]);
+  downPosition[1] = preferences.getInt("dPos1", downPosition[1]);
   preferences.end();
+
+  windowHeight[0] = downPosition[0];
+  windowHeight[1] = downPosition[1];
 
   morningHour = constrain(morningHour, 0, 23);
   morningMinute = constrain(morningMinute, 0, 59);
@@ -424,7 +431,8 @@ void loadPersistedConfig() {
   solarChargerStartOffsetMin = constrain(solarChargerStartOffsetMin, 0, 360);
   solarChargerStopOffsetMin = constrain(solarChargerStopOffsetMin, 0, 360);
   if (STALL_MIN_SPEED < 1) STALL_MIN_SPEED = 1;
-  if (speed < 1) speed = 1;
+  if (motorSpeed[0] < 1) motorSpeed[0] = 1;
+  if (motorSpeed[1] < 1) motorSpeed[1] = 1;
   if (acceleration < 1) acceleration = 1;
   if (R_SHUNT_BAT <= 0.0f || R_SHUNT_BAT > 1.0f) R_SHUNT_BAT = 0.02455f;
   if (R_SHUNT_PV <= 0.0f || R_SHUNT_PV > 1.0f) R_SHUNT_PV = 0.02436f;
@@ -446,10 +454,14 @@ void savePersistedConfig() {
   preferences.putUChar("stall", STALL_VALUE);
   preferences.putUChar("lstall", LOW_STALL_VALUE);
   preferences.putUInt("stMin", STALL_MIN_SPEED);
-  preferences.putUInt("speed", speed);
+  preferences.putUInt("speed", motorSpeed[0]);
+  preferences.putUInt("speed0", motorSpeed[0]);
+  preferences.putUInt("speed1", motorSpeed[1]);
   preferences.putUInt("accel", acceleration);
   preferences.putFloat("rBat", R_SHUNT_BAT);
   preferences.putFloat("rPv", R_SHUNT_PV);
+  preferences.putInt("dPos0", downPosition[0]);
+  preferences.putInt("dPos1", downPosition[1]);
   preferences.end();
 }
 
@@ -805,13 +817,13 @@ void setupSteppers() {
 
   stepper[0]->setDirectionPin(DIR0);
   stepper[0]->setEnablePin(ENABLE0, true);
-  stepper[0]->setSpeedInHz(speed);
+  stepper[0]->setSpeedInHz(motorSpeed[0]);
   stepper[0]->setAcceleration(acceleration);
   stepper[0]->setAutoEnable(true);
 
   stepper[1]->setDirectionPin(DIR1);
   stepper[1]->setEnablePin(ENABLE1, true);
-  stepper[1]->setSpeedInHz(speed);
+  stepper[1]->setSpeedInHz(motorSpeed[1]);
   stepper[1]->setAcceleration(acceleration);
   stepper[1]->setAutoEnable(true);
 }
@@ -974,7 +986,7 @@ void configureServer() {
     float awning1Percent = 100.0f * ((float)stepper[1]->getCurrentPosition()) / ((float)windowHeight[1]);
     int dist0 = stepper[0]->targetPos() - stepper[0]->getCurrentPosition();
     int dist1 = stepper[1]->targetPos() - stepper[1]->getCurrentPosition();
-    StaticJsonDocument<640> doc;
+    StaticJsonDocument<768> doc;
     doc["batteryVoltage"]      = batteryVoltage;
     doc["batteryCurrent"]      = batteryCurrent;
     doc["currentCapacity_mAh"] = currentCapacity_mAh;
@@ -991,10 +1003,12 @@ void configureServer() {
     doc["dist1"]               = dist1;
     doc["awning0Percent"]      = awning0Percent;
     doc["awning1Percent"]      = awning1Percent;
+    doc["motorSpeed0"]         = motorSpeed[0];
+    doc["motorSpeed1"]         = motorSpeed[1];
     doc["homeFlag"]            = homeFlag;
     doc["raining"]             = !rainState;
 
-    char json[640];
+    char json[768];
     serializeJson(doc, json, sizeof(json));
     request->send(200, "application/json", json);
   });
@@ -1002,7 +1016,7 @@ void configureServer() {
 
   server.on("/config", HTTP_GET, [](AsyncWebServerRequest *request) {
     
-  StaticJsonDocument<768> doc;  // adjust size if you add more fields
+  StaticJsonDocument<1024> doc;  // adjust size if you add more fields
 
   doc["currentHour"]         = currentHour;
   doc["currentMinute"]       = currentMinute;
@@ -1021,6 +1035,10 @@ void configureServer() {
   doc["chargerConnected"]    = isChargerConnected();
   doc["solarChargerStartOffsetMin"] = solarChargerStartOffsetMin;
   doc["solarChargerStopOffsetMin"]  = solarChargerStopOffsetMin;
+  doc["motorSpeed0"]         = motorSpeed[0];
+  doc["motorSpeed1"]         = motorSpeed[1];
+  doc["travelSteps0"]        = abs(windowHeight[0]);
+  doc["travelSteps1"]        = abs(windowHeight[1]);
 
   char sunriseBuf[16];
   snprintf(sunriseBuf, sizeof(sunriseBuf), "%sh", sunriseStr);
@@ -1044,7 +1062,7 @@ void configureServer() {
   doc["moveTime0"]        = moveTimeStr[0];    
   doc["moveTime1"]        = moveTimeStr[1];
 
-  char json[768];
+  char json[1024];
   serializeJson(doc, json, sizeof(json));
   request->send(200, "application/json", json);
   });
@@ -1330,7 +1348,8 @@ void home() {
     homed[i] = false;
     moveFlag[i] = true;
     homingPhase[i] = 0;  // Start at phase 0
-    stepper[i]->setSpeedInHz(speed / 2);
+    uint32_t homingSpeed = motorSpeed[i] / 2;
+    stepper[i]->setSpeedInHz(homingSpeed > 0 ? homingSpeed : 1);
   }
 }
 
@@ -1472,7 +1491,7 @@ void checkMotors() {
           moveFlag[i] = false;
           currentPosition[i] = 0;
           stepper[i]->setCurrentPosition(currentPosition[i]);
-          stepper[i]->setSpeedInHz(speed);
+          stepper[i]->setSpeedInHz(motorSpeed[i]);
           if (homed[0] && homed[1]) {
               homeFlag = false;
               initialHome = true;
@@ -1980,6 +1999,20 @@ void handleSave(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_
     bool newSolarChargerEnabled = json["solarChargerEnabled"];
     solarChargerEnabled = newSolarChargerEnabled;
   }
+  if (json.containsKey("motorSpeed0")) {
+    int nextSpeed0 = (int)json["motorSpeed0"];
+    if (nextSpeed0 < 1) nextSpeed0 = 1;
+    if (nextSpeed0 > 300000) nextSpeed0 = 300000;
+    motorSpeed[0] = nextSpeed0;
+    stepper[0]->setSpeedInHz(motorSpeed[0]);
+  }
+  if (json.containsKey("motorSpeed1")) {
+    int nextSpeed1 = (int)json["motorSpeed1"];
+    if (nextSpeed1 < 1) nextSpeed1 = 1;
+    if (nextSpeed1 > 300000) nextSpeed1 = 300000;
+    motorSpeed[1] = nextSpeed1;
+    stepper[1]->setSpeedInHz(motorSpeed[1]);
+  }
   formatTimeToHHMM(getChargerStartTime(), chargerStartStr, sizeof(chargerStartStr));
   formatTimeToHHMM(getChargerStopTime(), chargerStopStr, sizeof(chargerStopStr));
   time_t now = time(nullptr);
@@ -2005,16 +2038,50 @@ void handleSave(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_
 
 void handleSetEnd(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
   StaticJsonDocument<128> json;
-  deserializeJson(json, data, len);
+  DeserializationError err = deserializeJson(json, data, len);
+  if (err) {
+    request->send(400, "text/plain", "Bad JSON");
+    return;
+  }
 
   const char *buttonId = json["buttonId"];
-  uint8_t i = buttonId[strlen(buttonId) - 1] == '0' ? 0 : 1;
-
-  if (settingEnd[i] && stepper[i]->getCurrentPosition() != 0) {
-    downPosition[i] = stepper[i]->getCurrentPosition();
+  if (!buttonId || strlen(buttonId) == 0) {
+    request->send(400, "text/plain", "Missing buttonId");
+    return;
   }
-  settingEnd[i] = !settingEnd[i];
-  request->send(200, "text/plain", "Data Saved");
+
+  char indexChar = buttonId[strlen(buttonId) - 1];
+  if (indexChar != '0' && indexChar != '1') {
+    request->send(400, "text/plain", "Invalid motor index");
+    return;
+  }
+
+  uint8_t i = indexChar == '0' ? 0 : 1;
+  const char *action = json["action"] | "";
+  bool startAction = strcmp(action, "start") == 0 || strstr(buttonId, "end") != NULL;
+  bool saveAction = strcmp(action, "save") == 0 || strstr(buttonId, "save") != NULL;
+
+  if (!startAction && !saveAction) {
+    request->send(400, "text/plain", "Unknown action");
+    return;
+  }
+
+  if (startAction && !saveAction) {
+    settingEnd[i] = true;
+    request->send(200, "text/plain", "End position setup started");
+    return;
+  }
+
+  if (stepper[i]->getCurrentPosition() == 0) {
+    request->send(400, "text/plain", "Move awning away from home before saving");
+    return;
+  }
+
+  downPosition[i] = stepper[i]->getCurrentPosition();
+  windowHeight[i] = downPosition[i];
+  settingEnd[i] = false;
+  savePersistedConfig();
+  request->send(200, "text/plain", "End position saved");
 }
 
 
@@ -2045,6 +2112,8 @@ void handleSetupDrivers(AsyncWebServerRequest *request, uint8_t *data, size_t le
   int lowStallValue = json["low_stall_value"] | -1;
   int stallMinSpeed = json["stall_min_speed"] | -1;
   int maxSpeed = json["max_speed"] | -1;
+  int maxSpeed0 = json["max_speed0"] | -1;
+  int maxSpeed1 = json["max_speed1"] | -1;
   int acc = json["acceleration"] | -1;
 
   if (lowStallValue >= 0 && lowStallValue <= 255) {
@@ -2060,9 +2129,20 @@ void handleSetupDrivers(AsyncWebServerRequest *request, uint8_t *data, size_t le
   }
 
   if (maxSpeed >= 1 && maxSpeed <= 300000) {
-    speed = maxSpeed;
-    stepper[0]->setSpeedInHz(speed);
-    stepper[1]->setSpeedInHz(speed);
+    motorSpeed[0] = maxSpeed;
+    motorSpeed[1] = maxSpeed;
+    stepper[0]->setSpeedInHz(motorSpeed[0]);
+    stepper[1]->setSpeedInHz(motorSpeed[1]);
+  }
+
+  if (maxSpeed0 >= 1 && maxSpeed0 <= 300000) {
+    motorSpeed[0] = maxSpeed0;
+    stepper[0]->setSpeedInHz(motorSpeed[0]);
+  }
+
+  if (maxSpeed1 >= 1 && maxSpeed1 <= 300000) {
+    motorSpeed[1] = maxSpeed1;
+    stepper[1]->setSpeedInHz(motorSpeed[1]);
   }
 
   if (acc >= 1 && acc <= 300000) {
@@ -2074,10 +2154,11 @@ void handleSetupDrivers(AsyncWebServerRequest *request, uint8_t *data, size_t le
   setupDrivers();
   savePersistedConfig();
 
-  char response[100];
+  char response[140];
   snprintf(response, sizeof(response),
-           "STALL_VALUE = %d\nSTALL_MIN_SPEED = %d\nLOW_STALL_VALUE = %d\nspeed = %d\nacceleration = %d",
-           STALL_VALUE, STALL_MIN_SPEED, LOW_STALL_VALUE, speed, acceleration);
+           "STALL_VALUE = %d\nSTALL_MIN_SPEED = %d\nLOW_STALL_VALUE = %d\nspeed0 = %lu\nspeed1 = %lu\nacceleration = %lu",
+           STALL_VALUE, STALL_MIN_SPEED, LOW_STALL_VALUE,
+           (unsigned long)motorSpeed[0], (unsigned long)motorSpeed[1], (unsigned long)acceleration);
 
   request->send(200, "text/plain", response);
 }
