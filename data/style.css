@@ -290,6 +290,95 @@ input:disabled {
   margin-top: 0;
 }
 
+.speed-panel {
+  max-width: 46rem;
+  margin: 1.25em auto 0 auto;
+  padding: 1.1em 1.25em 1.2em;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: linear-gradient(180deg, #fdfcf9 0%, #ffffff 100%);
+  box-shadow: 0 18px 40px rgba(28, 27, 26, 0.06);
+}
+
+.speed-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1em;
+  margin-bottom: 1em;
+}
+
+.speed-panel-title {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.speed-panel-subtitle {
+  margin-top: 0.25em;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.speed-panel-unit {
+  padding: 0.45em 0.8em;
+  border-radius: 999px;
+  background: #eff7f2;
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.speed-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(13rem, 1fr));
+  gap: 0.9em;
+}
+
+.speed-card {
+  padding: 1em;
+  border-radius: 16px;
+  background: #fbfaf8;
+  border: 1px solid var(--line);
+}
+
+.speed-card-label {
+  color: #5b544d;
+  font-size: 0.95rem;
+  margin-bottom: 0.55em;
+}
+
+.speed-card-value {
+  margin-bottom: 0.7em;
+}
+
+.speed-input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 0.8em 0.9em;
+  font: inherit;
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--ink);
+  background: white;
+}
+
+.speed-input:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.speed-card-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8em;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
 .solar-offsets-panel {
   max-width: 34rem;
   margin: 1.1em auto 0 auto;
@@ -457,6 +546,22 @@ input:disabled {
   min-width: 6em;
 }
 
+@media (max-width: 700px) {
+  .speed-grid,
+  .solar-offsets-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .speed-panel-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .speed-card-meta {
+    flex-direction: column;
+  }
+}
+
 .update-shell {
   max-width: 46rem;
   margin: 0 auto;
@@ -534,5 +639,128 @@ input:disabled {
 @keyframes fall {
   to {
     transform: translateY(100vh);
+  }
+}
+
+.presets-panel {
+  max-width: 46rem;
+  margin: 2.5em auto 0;
+  padding: 1.1em 1.25em 1.25em;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--card);
+  box-shadow: 0 12px 32px rgba(28, 27, 26, 0.05);
+}
+
+.presets-heading h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.presets-heading p,
+.preset-card p {
+  color: var(--muted);
+  font-size: .88rem;
+}
+
+.presets-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: .75em;
+  margin-top: 1em;
+}
+
+.preset-card {
+  padding: .85em;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fbfaf8;
+  text-align: center;
+}
+
+.preset-name {
+  width: 100%;
+  padding: .35em;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: .98rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+.preset-name:focus {
+  border-color: var(--accent);
+  outline: none;
+  background: white;
+}
+
+.preset-card p {
+  min-height: 2.5em;
+  margin: .65em 0;
+}
+
+.preset-button {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: .55em .65em;
+  background: var(--ink);
+  color: white;
+  font: inherit;
+  font-size: .76rem;
+  font-weight: 600;
+  cursor: pointer;
+  flex: 1.25;
+}
+
+.preset-actions {
+  display: flex;
+  gap: .25em;
+}
+
+.preset-button.secondary {
+  margin-left: 0;
+  background: white;
+  color: var(--ink);
+  flex: 1;
+  font-size: .7rem;
+}
+
+.preset-feedback {
+  min-height: 1.3em;
+  margin: .8em 0 0;
+  color: var(--accent);
+  font-size: .86rem;
+  text-align: center;
+}
+
+.preset-feedback.error {
+  color: #a43636;
+}
+
+.morning-preset-row {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: .7em;
+  margin: 1.2em auto 0;
+  color: var(--muted);
+}
+
+.morning-preset-row select {
+  min-width: 10em;
+  padding: .55em .7em;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: white;
+  color: var(--ink);
+  font: inherit;
+}
+
+@media (max-width: 700px) {
+  .presets-grid {
+    grid-template-columns: 1fr;
   }
 }

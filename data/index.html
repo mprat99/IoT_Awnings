@@ -3,7 +3,7 @@
   <head>
     <title>Kitchen Awnings</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" type="text/css" href="style.css">
+    <link rel="stylesheet" type="text/css" href="/style.css">
   </head>
   <body>
     <div class="page">
@@ -80,6 +80,16 @@
       </table>
     </div>
 
+    <section class="presets-panel" aria-labelledby="presets-title">
+      <div class="presets-heading"><div><h2 id="presets-title">Saved positions</h2><p>Move both awnings where you want them, then save the position.</p></div></div>
+      <div class="presets-grid">
+        <article class="preset-card"><input class="preset-name" id="presetName0" aria-label="Preset 1 name" maxlength="15" value="Preset 1"><p id="presetPosition0">Awning 1: --% / Awning 2: --%</p><div class="preset-actions"><button class="preset-button" type="button" onclick="applyPreset(0)">GO</button><button class="preset-button secondary" type="button" onclick="savePreset(0)">SAVE CURRENT</button></div></article>
+        <article class="preset-card"><input class="preset-name" id="presetName1" aria-label="Preset 2 name" maxlength="15" value="Preset 2"><p id="presetPosition1">Awning 1: --% / Awning 2: --%</p><div class="preset-actions"><button class="preset-button" type="button" onclick="applyPreset(1)">GO</button><button class="preset-button secondary" type="button" onclick="savePreset(1)">SAVE CURRENT</button></div></article>
+        <article class="preset-card"><input class="preset-name" id="presetName2" aria-label="Preset 3 name" maxlength="15" value="Preset 3"><p id="presetPosition2">Awning 1: --% / Awning 2: --%</p><div class="preset-actions"><button class="preset-button" type="button" onclick="applyPreset(2)">GO</button><button class="preset-button secondary" type="button" onclick="savePreset(2)">SAVE CURRENT</button></div></article>
+      </div>
+      <p class="preset-feedback" id="presetFeedback" role="status"></p>
+    </section>
+
     <hr style="margin-top: 5em;">
 
     <!-- Automatic Day/Night -->
@@ -119,6 +129,11 @@
         Sunset: <span id="sunset">--:--h</span>
       </div>
     </div>
+  </div>
+
+  <div class="morning-preset-row">
+    <label for="morningPreset">Morning position</label>
+    <select id="morningPreset"></select>
   </div>
 
     <!-- <hr style="margin-top: 5em;"> -->
@@ -610,6 +625,66 @@
         });
       }
 
+      function renderPresets(config) {
+        const morningPreset = document.getElementById("morningPreset");
+        morningPreset.replaceChildren();
+
+        (config.presets || []).forEach((preset, index) => {
+          document.getElementById(`presetName${index}`).value = preset.name;
+          document.getElementById(`presetPosition${index}`).textContent =
+            `Awning 1: ${preset.awning0Percent}% / Awning 2: ${preset.awning1Percent}%`;
+          morningPreset.add(new Option(preset.name, index, false, index === config.morningPresetIndex));
+        });
+      }
+
+      function setPresetFeedback(message, isError = false) {
+        const feedback = document.getElementById("presetFeedback");
+        feedback.textContent = message;
+        feedback.classList.toggle("error", isError);
+      }
+
+      async function presetRequest(payload) {
+        let response;
+        try {
+          response = await fetch("/preset", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+        } catch (err) {
+          throw new Error("Could not reach the controller. Check its Wi-Fi connection and reload this page.");
+        }
+
+        const detail = await response.text();
+        if (!response.ok) {
+          throw new Error(`Controller refused the request (${response.status}): ${detail || "no detail"}`);
+        }
+        return detail;
+      }
+
+      async function applyPreset(presetIndex) {
+        try {
+          setPresetFeedback("Moving to preset…");
+          await presetRequest({ action: "apply", presetIndex });
+          setPresetFeedback("Preset move started.");
+        } catch (err) {
+          setPresetFeedback(err.message || "Could not apply preset.", true);
+        }
+      }
+
+      async function savePreset(presetIndex) {
+        const name = document.getElementById(`presetName${presetIndex}`).value.trim();
+
+        try {
+          setPresetFeedback("Saving current position…");
+          await presetRequest({ action: "save", presetIndex, name: name.slice(0, 15) });
+          await fetchConfig();
+          setPresetFeedback("Current position saved.");
+        } catch (err) {
+          setPresetFeedback(err.message || "Could not save preset.", true);
+        }
+      }
+
       async function fetchConfig() {
         try {
           const response = await fetch("/config");
@@ -623,6 +698,7 @@
             morningMinute: config.morningMinute,
             nightHour: config.nightHour,
             nightMinute: config.nightMinute,
+            morningPresetIndex: config.morningPresetIndex ?? 0,
             rainSensorEnabled: !!config.rainSensorEnabled,
             output12VEnabled: !!config.output12VEnabled,
             solarChargerEnabled: !!config.solarChargerEnabled,
@@ -639,6 +715,7 @@
           document.getElementById("morningMinute").value  = String(originalConfig.morningMinute).padStart(2, "0");
           document.getElementById("nightHour").value      = String(originalConfig.nightHour).padStart(2, "0");
           document.getElementById("nightMinute").value    = String(originalConfig.nightMinute).padStart(2, "0");
+          renderPresets(config);
           document.getElementById("rainSensorSwitch").checked = originalConfig.rainSensorEnabled;
           document.getElementById("output12VSwitch").checked = originalConfig.output12VEnabled;
           const chargerSwitch = document.getElementById("solarChargerSwitch");
@@ -684,6 +761,7 @@
           morningMinute: parseInt(document.getElementById("morningMinute").value) || 0,
           nightHour: parseInt(document.getElementById("nightHour").value) || 0,
           nightMinute: parseInt(document.getElementById("nightMinute").value) || 0,
+          morningPresetIndex: parseInt(document.getElementById("morningPreset").value) || 0,
           rainSensorEnabled: document.getElementById("rainSensorSwitch").checked,
           output12VEnabled: document.getElementById("output12VSwitch").checked,
           solarChargerAuto: document.getElementById("solarModeSwitch").checked,
@@ -756,6 +834,7 @@
           morningMinute: parseInt(document.getElementById("morningMinute").value) || 0,
           nightHour: parseInt(document.getElementById("nightHour").value) || 0,
           nightMinute: parseInt(document.getElementById("nightMinute").value) || 0,
+          morningPresetIndex: parseInt(document.getElementById("morningPreset").value) || 0,
           rainSensorEnabled: document.getElementById("rainSensorSwitch").checked ? 1 : 0,
           output12VEnabled: document.getElementById("output12VSwitch").checked ? 1 : 0,
           solarChargerAuto: document.getElementById("solarModeSwitch").checked ? 1 : 0,
@@ -783,6 +862,7 @@
             morningMinute: newConfig.morningMinute,
             nightHour: newConfig.nightHour,
             nightMinute: newConfig.nightMinute,
+            morningPresetIndex: newConfig.morningPresetIndex,
             rainSensorEnabled: !!newConfig.rainSensorEnabled,
             output12VEnabled: !!newConfig.output12VEnabled,
             solarChargerEnabled: !!newConfig.solarChargerEnabled,
@@ -811,6 +891,7 @@
         document.getElementById("morningMinute").addEventListener("input", checkForChanges);
         document.getElementById("nightHour").addEventListener("input", checkForChanges);
         document.getElementById("nightMinute").addEventListener("input", checkForChanges);
+        document.getElementById("morningPreset").addEventListener("change", checkForChanges);
         document.getElementById("rainSensorSwitch").addEventListener("change", checkForChanges);
         document.getElementById("output12VSwitch").addEventListener("change", checkForChanges);
         document.getElementById("solarChargerSwitch").addEventListener("change", checkForChanges);

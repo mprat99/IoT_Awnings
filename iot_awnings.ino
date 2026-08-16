@@ -102,6 +102,20 @@ int targetPosition[] = { 0, 0 };
 int currentPosition[] = { 0, 0 };
 int beforeRainPosition[] = { 0, 0 };
 
+constexpr uint8_t PRESET_COUNT = 3;
+constexpr uint8_t AWNING_COUNT = 2;
+struct AwningPreset {
+  char name[16];
+  uint8_t position[AWNING_COUNT];  // 0 = fully up, 100 = fully down
+};
+
+AwningPreset presets[PRESET_COUNT] = {
+  { "Open", { 0, 0 } },
+  { "Morning Shade", { 40, 40 } },
+  { "Afternoon", { 70, 70 } }
+};
+uint8_t morningPresetIndex = 0;
+
 int windowHeight[] = { 229000, -140500 };
 int downPosition[] = { 229000, -140500 };
 int maxPosition[] = { 500000, -300000 };
@@ -360,6 +374,9 @@ void getMoveTimeString();
 void home();
 void moveUp(uint8_t i);
 void moveDown(uint8_t i);
+void moveToPosition(uint8_t i, int position);
+void moveToPercent(uint8_t i, uint8_t percent);
+bool moveToPreset(uint8_t presetIndex, const char *reason);
 void stop(uint8_t i);
 
 void enableOutput12V();
@@ -385,6 +402,7 @@ void savePersistedEnergyState(bool force = false);
 void handleMove(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
 void handleSave(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
 void handleSetEnd(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
+void handlePreset(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
 void handleSaveWifi(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
 void handleSetupDrivers(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
 void handleSetupInas(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
@@ -419,6 +437,18 @@ void loadPersistedConfig() {
   R_SHUNT_PV = preferences.getFloat("rPv", R_SHUNT_PV);
   downPosition[0] = preferences.getInt("dPos0", downPosition[0]);
   downPosition[1] = preferences.getInt("dPos1", downPosition[1]);
+  morningPresetIndex = preferences.getUChar("mPreset", morningPresetIndex);
+  for (uint8_t p = 0; p < PRESET_COUNT; p++) {
+    char key[8];
+    snprintf(key, sizeof(key), "p%un0", p);
+    String defaultName = presets[p].name;
+    String name = preferences.getString(key, defaultName);
+    name.toCharArray(presets[p].name, sizeof(presets[p].name));
+    for (uint8_t i = 0; i < AWNING_COUNT; i++) {
+      snprintf(key, sizeof(key), "p%up%u", p, i);
+      presets[p].position[i] = preferences.getUChar(key, presets[p].position[i]);
+    }
+  }
   preferences.end();
 
   windowHeight[0] = downPosition[0];
@@ -436,6 +466,12 @@ void loadPersistedConfig() {
   if (acceleration < 1) acceleration = 1;
   if (R_SHUNT_BAT <= 0.0f || R_SHUNT_BAT > 1.0f) R_SHUNT_BAT = 0.02455f;
   if (R_SHUNT_PV <= 0.0f || R_SHUNT_PV > 1.0f) R_SHUNT_PV = 0.02436f;
+  if (morningPresetIndex >= PRESET_COUNT) morningPresetIndex = 0;
+  for (uint8_t p = 0; p < PRESET_COUNT; p++) {
+    for (uint8_t i = 0; i < AWNING_COUNT; i++) {
+      presets[p].position[i] = constrain(presets[p].position[i], 0, 100);
+    }
+  }
 }
 
 void savePersistedConfig() {
@@ -462,6 +498,16 @@ void savePersistedConfig() {
   preferences.putFloat("rPv", R_SHUNT_PV);
   preferences.putInt("dPos0", downPosition[0]);
   preferences.putInt("dPos1", downPosition[1]);
+  preferences.putUChar("mPreset", morningPresetIndex);
+  for (uint8_t p = 0; p < PRESET_COUNT; p++) {
+    char key[8];
+    snprintf(key, sizeof(key), "p%un0", p);
+    preferences.putString(key, presets[p].name);
+    for (uint8_t i = 0; i < AWNING_COUNT; i++) {
+      snprintf(key, sizeof(key), "p%up%u", p, i);
+      preferences.putUChar(key, presets[p].position[i]);
+    }
+  }
   preferences.end();
 }
 
@@ -1016,7 +1062,7 @@ void configureServer() {
 
   server.on("/config", HTTP_GET, [](AsyncWebServerRequest *request) {
     
-  StaticJsonDocument<1024> doc;  // adjust size if you add more fields
+  StaticJsonDocument<1536> doc;
 
   doc["currentHour"]         = currentHour;
   doc["currentMinute"]       = currentMinute;
@@ -1039,6 +1085,14 @@ void configureServer() {
   doc["motorSpeed1"]         = motorSpeed[1];
   doc["travelSteps0"]        = abs(windowHeight[0]);
   doc["travelSteps1"]        = abs(windowHeight[1]);
+  doc["morningPresetIndex"]  = morningPresetIndex;
+  JsonArray presetArray = doc.createNestedArray("presets");
+  for (uint8_t p = 0; p < PRESET_COUNT; p++) {
+    JsonObject preset = presetArray.createNestedObject();
+    preset["name"] = presets[p].name;
+    preset["awning0Percent"] = presets[p].position[0];
+    preset["awning1Percent"] = presets[p].position[1];
+  }
 
   char sunriseBuf[16];
   snprintf(sunriseBuf, sizeof(sunriseBuf), "%sh", sunriseStr);
@@ -1062,7 +1116,7 @@ void configureServer() {
   doc["moveTime0"]        = moveTimeStr[0];    
   doc["moveTime1"]        = moveTimeStr[1];
 
-  char json[1024];
+  char json[1536];
   serializeJson(doc, json, sizeof(json));
   request->send(200, "application/json", json);
   });
@@ -1138,6 +1192,13 @@ void configureServer() {
     },
     NULL,
     handleSetEnd);
+
+  server.on(
+    "/preset", HTTP_POST,
+    [](AsyncWebServerRequest *request) {
+    },
+    NULL,
+    handlePreset);
 
   server.on(
     "/saveWifi", HTTP_POST,
@@ -1407,6 +1468,32 @@ void moveDown(uint8_t i) {
   currentPosition[i] = stepper[i]->getCurrentPosition();
   targetPosition[i] = settingEnd[i] ? maxPosition[i] : downPosition[i];
   move(i);
+}
+
+void moveToPosition(uint8_t i, int position) {
+  currentPosition[i] = stepper[i]->getCurrentPosition();
+  int low = min(0, windowHeight[i]);
+  int high = max(0, windowHeight[i]);
+  targetPosition[i] = constrain(position, low, high);
+  move(i);
+}
+
+void moveToPercent(uint8_t i, uint8_t percent) {
+  percent = constrain(percent, 0, 100);
+  int target = (int)(((int64_t)windowHeight[i] * percent) / 100);
+  moveToPosition(i, target);
+}
+
+bool moveToPreset(uint8_t presetIndex, const char *reason) {
+  if (presetIndex >= PRESET_COUNT || !initialHome || homeFlag || moveFlag[0] || moveFlag[1]) {
+    return false;
+  }
+
+  for (uint8_t i = 0; i < AWNING_COUNT; i++) {
+    moveToPercent(i, presets[presetIndex].position[i]);
+    positionReason[i] = reason;
+  }
+  return true;
 }
 
 void move(uint8_t i) {
@@ -1803,12 +1890,7 @@ void checkTime() {
 
   if (scheduledAwnings) {
     if (!rainFlag && currentHour == morningHour && currentMinute == morningMinute && !moveUpMorning) {
-      for (uint8_t i = 0; i < 2; i++) {
-        if (currentPosition[i] != 0) {
-          moveUp(i);
-          positionReason[i] = "Scheduled Morning";
-        }
-      }
+      moveToPreset(morningPresetIndex, "Scheduled Morning");
       moveUpMorning = true;
     } else if (!rainFlag && currentHour == nightHour && currentMinute == nightMinute && !moveDownNight) {
       for (uint8_t i = 0; i < 2; i++) {
@@ -1939,8 +2021,7 @@ void checkRain() {
           if (!moveDownNight) {
             int target = (moveUpMorning) ? 0 : beforeRainPosition[i];
             if (currentPosition[i] != target) {
-              targetPosition[i] = target;
-              moveUp(i);
+              moveToPosition(i, target);
               positionReason[i] = "Stopped Raining";
             }
             moveUpMorning = false;
@@ -1967,6 +2048,9 @@ void handleSave(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_
   // Example optional fields:
   if (json.containsKey("morningHour")) morningHour = constrain((int)json["morningHour"], 0, 23);
   if (json.containsKey("morningMinute")) morningMinute = constrain((int)json["morningMinute"], 0, 59);
+  if (json.containsKey("morningPresetIndex")) {
+    morningPresetIndex = constrain((int)json["morningPresetIndex"], 0, PRESET_COUNT - 1);
+  }
   if (json.containsKey("nightHour")) nightHour = constrain((int)json["nightHour"], 0, 23);
   if (json.containsKey("nightMinute")) nightMinute = constrain((int)json["nightMinute"], 0, 59);
   if (json.containsKey("scheduled")) scheduledAwnings = json["scheduled"];
@@ -2082,6 +2166,56 @@ void handleSetEnd(AsyncWebServerRequest *request, uint8_t *data, size_t len, siz
   settingEnd[i] = false;
   savePersistedConfig();
   request->send(200, "text/plain", "End position saved");
+}
+
+void handlePreset(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t, size_t) {
+  StaticJsonDocument<256> json;
+  if (deserializeJson(json, data, len)) {
+    request->send(400, "text/plain", "Bad JSON");
+    return;
+  }
+
+  const char *action = json["action"] | "";
+  int presetIndex = json["presetIndex"] | -1;
+  if (presetIndex < 0 || presetIndex >= PRESET_COUNT) {
+    request->send(400, "text/plain", "Invalid preset");
+    return;
+  }
+
+  if (strcmp(action, "apply") == 0) {
+    if (rainFlag) {
+      request->send(409, "text/plain", "Cannot apply a preset while rain protection is active");
+      return;
+    }
+    if (!moveToPreset(presetIndex, "Preset")) {
+      request->send(409, "text/plain", "Home both awnings and wait for movement to finish first");
+      return;
+    }
+    request->send(200, "text/plain", "Moving to preset");
+    return;
+  }
+
+  if (strcmp(action, "save") == 0) {
+    if (!initialHome || homeFlag || moveFlag[0] || moveFlag[1]) {
+      request->send(409, "text/plain", "Home both awnings and wait for movement to finish before saving");
+      return;
+    }
+    for (uint8_t i = 0; i < AWNING_COUNT; i++) {
+      int position = stepper[i]->getCurrentPosition();
+      int percent = (int)(((int64_t)position * 100) / windowHeight[i]);
+      presets[presetIndex].position[i] = constrain(percent, 0, 100);
+    }
+    const char *name = json["name"] | "";
+    if (strlen(name) > 0) {
+      strncpy(presets[presetIndex].name, name, sizeof(presets[presetIndex].name) - 1);
+      presets[presetIndex].name[sizeof(presets[presetIndex].name) - 1] = '\0';
+    }
+    savePersistedConfig();
+    request->send(200, "text/plain", "Preset saved");
+    return;
+  }
+
+  request->send(400, "text/plain", "Unknown preset action");
 }
 
 
